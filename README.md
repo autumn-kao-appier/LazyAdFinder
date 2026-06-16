@@ -5,11 +5,11 @@ Automates the tedious part of iOS ad QA: keep tapping into an ad placement until
 ## How it works
 
 ```
-mitmproxy (detector.py)   ←── watches network traffic
-        +
-Appium  (run.py)          ←── taps "basic" → waits 2s → backs out → repeat
-        ↓
-Appier request detected?  → script stops, you inspect in mitmweb
+Phone → Charles (8080) → mitmdump/detector.py (8081) → internet
+                ↓
+        you inspect in Charles
+                +
+        Appier request detected? → script stops
 ```
 
 Tested against **appierAdSwift** (`com.appier.Random`) — AdMob Mediation / Native ad flow.
@@ -44,8 +44,8 @@ Install the mitmproxy CA cert on your iOS device:
 Open three terminals:
 
 ```bash
-# 1. mitmproxy (also opens web UI at http://127.0.0.1:8081)
-mitmweb -s ~/appier_qa/detector.py --listen-port 8080
+# 1. mitmdump (silent, detection only — you inspect traffic in Charles)
+mitmdump -s ~/appier_qa/detector.py --listen-port 8081
 
 # 2. Appium
 appium
@@ -54,7 +54,9 @@ appium
 python ~/appier_qa/run.py 50
 ```
 
-When an Appier request is detected, the script prints the matched URL and stops. Open **http://127.0.0.1:8081** to inspect the full request in mitmweb.
+**Charles setup (one-time):** Proxy → External Proxy Settings → enable, set HTTP + HTTPS to `127.0.0.1:8081`.
+
+When an Appier request is detected, the script stops. Inspect the request in Charles as usual.
 
 ---
 

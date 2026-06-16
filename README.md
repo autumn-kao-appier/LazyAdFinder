@@ -21,7 +21,7 @@ Tested against **appierAdSwift** (`com.appier.Random`) — AdMob Mediation / Nat
 ### 1. Install dependencies
 
 ```bash
-pip install mitmproxy Appium-Python-Client
+pip install -r requirements.txt
 npm install -g appium
 appium driver install xcuitest
 ```

@@ -16,7 +16,9 @@ Tested against **appierAdSwift** (`com.appier.Random`) — AdMob Mediation / Nat
 
 ---
 
-## Prerequisites
+## One-time setup
+
+### 1. Install dependencies
 
 ```bash
 pip install mitmproxy Appium-Python-Client
@@ -24,18 +26,33 @@ npm install -g appium
 appium driver install xcuitest
 ```
 
-Install the mitmproxy CA cert on your iOS device:
-→ https://docs.mitmproxy.org/stable/concepts-certificates/
+### 2. Sign WebDriverAgent (required for real device)
 
----
+```bash
+open ~/.appium/node_modules/appium-xcuitest-driver/node_modules/appium-webdriveragent/WebDriverAgent.xcodeproj
+```
 
-## Setup (one-time)
+In Xcode: select **WebDriverAgentLib** and **WebDriverAgentRunner** targets → Signing & Capabilities → set your Apple Developer Team.
 
-1. Connect iPhone to the same Wi-Fi as your Mac.
-2. On iPhone: **Settings → Wi-Fi → (your network) → Configure Proxy → Manual**
-   - Server: your Mac's local IP
-   - Port: `8080`
-3. Build & install **appierAdSwift** on the device.
+### 3. Set your device UDID in `run.py`
+
+```bash
+xcrun xctrace list devices
+```
+
+Update the `options.udid` line in `run.py` with your iPhone's UDID.
+
+### 4. Install Charles CA cert on iPhone
+
+Settings → Wi-Fi → (your network) → Configure Proxy → Manual
+- Server: your Mac's local IP (`ipconfig getifaddr en0`)
+- Port: `8080`
+
+Then open `chls.pro/ssl` in Safari on the iPhone → install the profile → Settings → General → About → Certificate Trust Settings → enable Charles.
+
+### 5. Charles upstream proxy (one-time)
+
+Proxy → External Proxy Settings → enable → set HTTP + HTTPS to `127.0.0.1:8081`
 
 ---
 
@@ -44,28 +61,23 @@ Install the mitmproxy CA cert on your iOS device:
 Open three terminals:
 
 ```bash
-# 1. mitmdump (silent, detection only — you inspect traffic in Charles)
+# Terminal 1 — detection (silent, traffic visible in Charles)
 mitmdump -s ~/appier_qa/detector.py --listen-port 8081
 
-# 2. Appium
+# Terminal 2 — Appium
 appium
 
-# 3. The script (optional: pass max rounds, default 30)
+# Terminal 3 — the script (optional: max rounds, default 30)
 python ~/appier_qa/run.py 50
 ```
 
-**Charles setup (one-time):** Proxy → External Proxy Settings → enable, set HTTP + HTTPS to `127.0.0.1:8081`.
+When an Appier request is detected, the script prints `[STOP]` and halts. Inspect the full request in Charles.
 
-When an Appier request is detected, the script stops. Inspect the request in Charles as usual.
+To stop early: `Ctrl+C` in Terminal 3. Terminals 1 and 2 stay open for the next run.
 
 ---
 
-## Multiple devices
+## Notes
 
-Uncomment and fill in the `udid` line in `run.py`:
-
-```python
-options.udid = "YOUR_DEVICE_UDID"
-```
-
-Get UDID via: `xcrun xctrace list devices`
+- The script handles the case where the app launches already on the ad page — it navigates back to the list automatically before starting.
+- Detection matches any request to `appier.net` or `appier.com`.

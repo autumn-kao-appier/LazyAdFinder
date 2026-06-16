@@ -28,6 +28,16 @@ appium driver install xcuitest
 
 ### 2. Sign WebDriverAgent (required for real device)
 
+> **捷徑**：如果你有 Apple Developer Team ID，可以跳過手動 Xcode 步驟，改用環境變數讓 Appium 自動簽：
+> ```bash
+> export XCODE_ORG_ID=XXXXXXXXXX   # 你的 Team ID（Xcode → Settings → Accounts 裡看）
+> export WDA_BUNDLE_ID=com.yourname.wda  # bundle id 衝突時才需要設
+> python ~/appier_qa/run.py
+> ```
+> 設了 `XCODE_ORG_ID` 之後下面的手動步驟可以略過。
+
+**手動方式（沒有 Team ID 或自動簽失敗時）**
+
 Appium 需要在你的手機上裝一個叫 WebDriverAgent 的輔助 app，裝之前要先用你的 Apple 帳號簽名。只需要做一次。
 
 **Step 1 — 用 Terminal 打開 Xcode 專案**

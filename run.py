@@ -33,7 +33,7 @@ def detect_udid():
     out = subprocess.check_output(["xcrun", "xctrace", "list", "devices"], text=True)
     # 只抓 == Devices == 區塊（排除 Offline 跟 Simulators）
     devices_section = out.split("== Devices ==")[1].split("==")[0]
-    udids = re.findall(r'\(([0-9a-f]{16,40})\)', devices_section)
+    udids = re.findall(r'\(([0-9a-fA-F-]{16,43})\)', devices_section)
     macs = re.findall(r'Mac.*\(([A-F0-9-]{36})\)', devices_section)
     udids = [u for u in udids if u not in macs]
     if not udids:

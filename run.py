@@ -65,18 +65,26 @@ try:
         pass
 
     for i in range(1, MAX_ROUNDS + 1):
-        print(f"[{i}/{MAX_ROUNDS}] tapping basic ...")
+        # 每輪先確保回到 list 頁（不管上一輪停在哪）
+        try:
+            driver.find_element("accessibility id", "BackButton").click()
+            time.sleep(1.0)
+        except Exception:
+            pass
 
-        driver.find_element("accessibility id", "basic").click()
+        print(f"[{i}/{MAX_ROUNDS}] tapping basic ...")
+        try:
+            driver.find_element("accessibility id", "basic").click()
+        except Exception:
+            print(f"[{i}] 找不到 basic，重試")
+            continue
+
         time.sleep(AD_WAIT_SEC)
 
         if os.path.exists(FLAG_FILE):
             hit = open(FLAG_FILE).read().strip()
             print(f"\n[STOP] Appier detected — {hit}")
             break
-
-        driver.find_element("accessibility id", "BackButton").click()
-        time.sleep(1.0)
     else:
         print(f"\n[DONE] {MAX_ROUNDS} 輪都沒出現 Appier ad。")
 

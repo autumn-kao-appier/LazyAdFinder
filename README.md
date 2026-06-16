@@ -34,13 +34,17 @@ open ~/.appium/node_modules/appium-xcuitest-driver/node_modules/appium-webdriver
 
 In Xcode: select **WebDriverAgentLib** and **WebDriverAgentRunner** targets → Signing & Capabilities → set your Apple Developer Team.
 
-### 3. Set your device UDID in `run.py`
+### 3. Connect your iPhone
+
+UDID is auto-detected when only one iPhone is connected. If you have multiple devices, pass it explicitly:
 
 ```bash
+# find UDIDs
 xcrun xctrace list devices
-```
 
-Update the `options.udid` line in `run.py` with your iPhone's UDID.
+# run with specific device
+python ~/appier_qa/run.py 30 YOUR_DEVICE_UDID
+```
 
 ### 4. Install Charles CA cert on iPhone
 

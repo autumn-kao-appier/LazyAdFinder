@@ -98,9 +98,20 @@ Settings → Wi-Fi → (your network) → Configure Proxy → Manual
 
 Then open `chls.pro/ssl` in Safari on the iPhone → install the profile → Settings → General → About → Certificate Trust Settings → enable Charles.
 
-### 5. Charles upstream proxy (one-time)
+### 5. Charles upstream proxy（選用，開啟後每輪會印出廣告主）
 
-Proxy → External Proxy Settings → enable → set HTTP + HTTPS to `127.0.0.1:8081`
+不設也能跑，只是不會顯示每輪是哪家的廣告。
+
+設了之後每輪會印：
+```
+[3/30] tapping basic ...
+         → Google/AdMob, Smadex
+```
+
+**設定方式：** Charles → Proxy → External Proxy Settings
+- 勾選 **Use external proxy servers**
+- HTTP Proxy: `127.0.0.1` port `8081`
+- HTTPS Proxy: `127.0.0.1` port `8081`
 
 ---
 

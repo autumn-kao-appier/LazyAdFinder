@@ -21,6 +21,7 @@ from appium import webdriver
 from appium.options.ios.xcuitest.base import XCUITestOptions
 
 FLAG_FILE = "/tmp/appier_hit"
+NETWORK_FILE = "/tmp/current_networks"
 BUNDLE_ID = "com.appier.Random"
 APPIUM_SERVER = "http://127.0.0.1:4723"
 AD_WAIT_SEC = 2.0
@@ -96,6 +97,9 @@ try:
         # 每輪先確保回到 list 頁（不管上一輪停在哪）
         ensure_on_list(driver)
 
+        if os.path.exists(NETWORK_FILE):
+            os.remove(NETWORK_FILE)
+
         print(f"[{i}/{MAX_ROUNDS}] tapping basic ...")
         try:
             driver.find_element("accessibility id", "basic").click()
@@ -104,6 +108,12 @@ try:
             continue
 
         time.sleep(AD_WAIT_SEC)
+
+        if os.path.exists(NETWORK_FILE):
+            names = list(dict.fromkeys(open(NETWORK_FILE).read().splitlines()))
+            print(f"         → {', '.join(names) if names else '(unknown)'}")
+        else:
+            print(f"         → (mitmdump 沒收到流量，確認 Charles upstream proxy 設為 127.0.0.1:8081)")
 
         if os.path.exists(FLAG_FILE):
             hit = open(FLAG_FILE).read().strip()

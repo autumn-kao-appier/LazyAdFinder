@@ -52,6 +52,21 @@ def detect_udid():
     return udids[0]
 
 
+def ensure_on_list(driver):
+    """確保停在 list 頁：找得到 basic 就代表在 list，找不到就 driver.back() 退回。
+    這個 app 的返回鍵沒有固定的 accessibility id，用 driver.back() 比較穩。"""
+    for _ in range(3):
+        try:
+            driver.find_element("accessibility id", "basic")
+            return
+        except Exception:
+            try:
+                driver.back()
+                time.sleep(1.0)
+            except Exception:
+                return
+
+
 # 清掉上一次的 flag
 if os.path.exists(FLAG_FILE):
     os.remove(FLAG_FILE)
@@ -74,32 +89,26 @@ if XCODE_ORG_ID:
 driver = webdriver.Remote(APPIUM_SERVER, options=options)
 
 try:
-    # 確保從 list 開始：找不到 basic 代表還停在廣告頁，就退回上一頁
-    # （這個 app 的返回鍵沒有固定的 accessibility id，用 driver.back() 比較穩）
-    for _ in range(3):
-        try:
-            driver.find_element("accessibility id", "basic")
-            break  # 已經在 list
-        except Exception:
-            try:
-                driver.back()
-                time.sleep(1.0)
-            except Exception:
-                break
+    # 一開始先確保停在 list（app 可能停在廣告頁）
+    ensure_on_list(driver)
 
     for i in range(1, MAX_ROUNDS + 1):
-        print(f"[{i}/{MAX_ROUNDS}] tapping basic ...")
+        # 每輪先確保回到 list 頁（不管上一輪停在哪）
+        ensure_on_list(driver)
 
-        driver.find_element("accessibility id", "basic").click()
+        print(f"[{i}/{MAX_ROUNDS}] tapping basic ...")
+        try:
+            driver.find_element("accessibility id", "basic").click()
+        except Exception:
+            print(f"[{i}] 找不到 basic，重試")
+            continue
+
         time.sleep(AD_WAIT_SEC)
 
         if os.path.exists(FLAG_FILE):
             hit = open(FLAG_FILE).read().strip()
             print(f"\n[STOP] Appier detected — {hit}")
             break
-
-        driver.back()  # 退回 list 準備下一輪
-        time.sleep(1.0)
     else:
         print(f"\n[DONE] {MAX_ROUNDS} 輪都沒出現 Appier ad。")
 

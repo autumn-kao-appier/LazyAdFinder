@@ -121,7 +121,7 @@ Open three terminals:
 
 ```bash
 # Terminal 1 — detection (silent, traffic visible in Charles)
-mitmdump -s ~/appier_qa/detector.py --listen-port 8081 --ignore-hosts '.*\.apple\.com|.*\.mzstatic\.com'
+mitmdump -s ~/appier_qa/detector.py --listen-port 8081
 
 # Terminal 2 — Appium
 appium

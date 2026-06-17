@@ -5,7 +5,7 @@ mitmproxy addon: 偵測 Appier 的 network request，寫 flag 通知 run.py 停�
     mitmdump -s ~/appier_qa/detector.py --listen-port 8081
 """
 
-from mitmproxy import http
+from mitmproxy import ctx, http
 
 FLAG_FILE = "/tmp/appier_hit"
 NETWORK_FILE = "/tmp/current_networks"
@@ -33,6 +33,9 @@ NETWORK_MAP = {
 
 
 class AppierDetector:
+    def running(self):
+        ctx.options.ignore_hosts = [r".*\.apple\.com", r".*\.mzstatic\.com"]
+
     def request(self, flow: http.HTTPFlow) -> None:
         host = flow.request.host
 

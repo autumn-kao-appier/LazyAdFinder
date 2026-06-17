@@ -109,8 +109,14 @@ try:
             continue
 
         deadline = time.monotonic() + AD_TIMEOUT_SEC
+        # Phase 1: wait for first request (ad loaded)
         while time.monotonic() < deadline:
             if os.path.exists(NETWORK_FILE) or os.path.exists(FLAG_FILE):
+                break
+            time.sleep(AD_POLL_INTERVAL)
+        # Phase 2: use remaining window to catch Appier requests that arrive after first hit
+        while time.monotonic() < deadline:
+            if os.path.exists(FLAG_FILE):
                 break
             time.sleep(AD_POLL_INTERVAL)
 

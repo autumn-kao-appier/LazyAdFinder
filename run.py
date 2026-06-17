@@ -24,7 +24,8 @@ FLAG_FILE = "/tmp/appier_hit"
 NETWORK_FILE = "/tmp/current_networks"
 BUNDLE_ID = "com.appier.Random"
 APPIUM_SERVER = "http://127.0.0.1:4723"
-AD_WAIT_SEC = 2.0
+AD_TIMEOUT_SEC = 5.0
+AD_POLL_INTERVAL = 0.1
 MAX_ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 30
 
 # 真機簽 WebDriverAgent 用的 Apple Development Team ID（cert 的 OU 欄位）。
@@ -107,7 +108,11 @@ try:
             print(f"[{i}] 找不到 basic，重試")
             continue
 
-        time.sleep(AD_WAIT_SEC)
+        deadline = time.monotonic() + AD_TIMEOUT_SEC
+        while time.monotonic() < deadline:
+            if os.path.exists(NETWORK_FILE) or os.path.exists(FLAG_FILE):
+                break
+            time.sleep(AD_POLL_INTERVAL)
 
         if os.path.exists(NETWORK_FILE):
             names = list(dict.fromkeys(open(NETWORK_FILE).read().splitlines()))

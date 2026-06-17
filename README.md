@@ -5,7 +5,7 @@ Automates the tedious part of iOS ad QA: keep tapping into an ad placement until
 ## How it works
 
 ```
-Phone → Charles (8080) → mitmdump/detector.py (8081) → internet
+Phone → Charles (8888) → mitmdump/detector.py (8081) → internet
                 ↓
         you inspect in Charles
                 +
@@ -94,7 +94,7 @@ python ~/appier_qa/run.py 30 YOUR_DEVICE_UDID
 
 Settings → Wi-Fi → (your network) → Configure Proxy → Manual
 - Server: your Mac's local IP (`ipconfig getifaddr en0`)
-- Port: `8080`
+- Port: `8888`
 
 Then open `chls.pro/ssl` in Safari on the iPhone → install the profile → Settings → General → About → Certificate Trust Settings → enable Charles.
 
@@ -121,7 +121,7 @@ Open three terminals:
 
 ```bash
 # Terminal 1 — detection (silent, traffic visible in Charles)
-mitmdump -s ~/appier_qa/detector.py --listen-port 8081
+mitmdump -s ~/appier_qa/detector.py --listen-port 8081 --ignore-hosts '.*\.apple\.com|.*\.mzstatic\.com'
 
 # Terminal 2 — Appium
 appium

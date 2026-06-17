@@ -8,7 +8,7 @@
 前置：
     pip install Appium-Python-Client
     appium（另開 terminal: appium）
-    手機 Wi-Fi proxy 設為 Mac IP:8080（跟 Charles 同 port）
+    手機 Wi-Fi proxy 設為 Mac IP:8888（跟 Charles 同 port）
 """
 
 import os

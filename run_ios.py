@@ -69,9 +69,10 @@ def ensure_on_list(driver):
                 return
 
 
-# 清掉上一次的 flag
-if os.path.exists(FLAG_FILE):
-    os.remove(FLAG_FILE)
+# 清掉上一次的 flag / network 紀錄
+for f in (FLAG_FILE, NETWORK_FILE):
+    if os.path.exists(f):
+        os.remove(f)
 
 options = XCUITestOptions()
 options.bundle_id = BUNDLE_ID

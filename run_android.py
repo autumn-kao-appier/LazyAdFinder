@@ -51,7 +51,7 @@ def detect_udid():
     devices = [
         line.split()[0]
         for line in out.splitlines()
-        if line.strip() and not line.startswith("List") and "device" in line and "offline" not in line
+        if line.strip() and not line.startswith("List") and line.split()[-1] == "device"
     ]
     if not devices:
         sys.exit("找不到連接的 Android 裝置，請確認 USB 偵錯已開啟。")
@@ -76,8 +76,10 @@ def ensure_on_list(driver):
                 return
 
 
-if os.path.exists(FLAG_FILE):
-    os.remove(FLAG_FILE)
+# 清掉上一次的 flag / network 紀錄
+for f in (FLAG_FILE, NETWORK_FILE):
+    if os.path.exists(f):
+        os.remove(f)
 
 options = UiAutomator2Options()
 options.app_package = APP_PACKAGE

@@ -2,7 +2,7 @@
 mitmproxy addon: 偵測 Appier 的 network request，寫 flag 通知 run.py 停止。
 
 用法（terminal 1）:
-    mitmdump -s ~/appier_qa/detector.py --listen-port 8081
+    mitmdump -s ~/LazyAdFinder/detector.py --listen-port 8081
 """
 
 from mitmproxy import ctx, http

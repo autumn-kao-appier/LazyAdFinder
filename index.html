@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%8E%AF</text></svg>">
+<title>LazyAdFinder · SDK 測試報告平台</title>
+<style>
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --panel-2:#f6f8fa;
+  --ink:#131a21; --ink-soft:#516069; --ink-faint:#7d8b94; --line:#dbe2e8;
+  --accent:#0e7c86; --accent-ink:#0a5c64; --accent-soft:#e2eff1;
+  --aos:#2e9e5b; --aos-soft:#e4f4ea; --ios:#3a6ea5; --ios-soft:#e6eef7;
+  --pass:#2f7d3a; --fail:#c0392b; --pend:#5b6b78; --block:#b5761a;
+  --shadow:0 1px 2px rgba(19,26,33,.06),0 8px 24px rgba(19,26,33,.06);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;
+  --radius:14px; --topbar:clamp(40px,6vh,50px);
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0d1216; --panel:#151d23; --panel-2:#111820;
+  --ink:#e7edf1; --ink-soft:#a6b6c1; --ink-faint:#71828d; --line:#243039;
+  --accent:#38bdc9; --accent-ink:#7ad6df; --accent-soft:#123037;
+  --aos:#4cc57d; --aos-soft:#12281b; --ios:#6ba6dd; --ios-soft:#132132;
+  --pass:#5cc46a; --fail:#f0766a; --pend:#9fb0bc; --block:#e0a94a;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+}}
+:root[data-theme="light"]{
+  --bg:#eef1f4; --panel:#ffffff; --panel-2:#f6f8fa;
+  --ink:#131a21; --ink-soft:#516069; --ink-faint:#7d8b94; --line:#dbe2e8;
+  --accent:#0e7c86; --accent-ink:#0a5c64; --accent-soft:#e2eff1;
+  --aos:#2e9e5b; --aos-soft:#e4f4ea; --ios:#3a6ea5; --ios-soft:#e6eef7;
+  --pass:#2f7d3a; --fail:#c0392b; --pend:#5b6b78; --block:#b5761a;
+  --shadow:0 1px 2px rgba(19,26,33,.06),0 8px 24px rgba(19,26,33,.06);
+}
+:root[data-theme="dark"]{
+  --bg:#0d1216; --panel:#151d23; --panel-2:#111820;
+  --ink:#e7edf1; --ink-soft:#a6b6c1; --ink-faint:#71828d; --line:#243039;
+  --accent:#38bdc9; --accent-ink:#7ad6df; --accent-soft:#123037;
+  --aos:#4cc57d; --aos-soft:#12281b; --ios:#6ba6dd; --ios-soft:#132132;
+  --pass:#5cc46a; --fail:#f0766a; --pend:#9fb0bc; --block:#e0a94a;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--sans);
+  font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  display:flex; flex-direction:column; min-height:100vh;
+}
+.mono{font-family:var(--mono)}
+.tnum{font-variant-numeric:tabular-nums}
+
+/* ── top bar ── */
+.top{
+  position:sticky; top:0; z-index:30; height:var(--topbar);
+  display:flex; align-items:center; gap:10px; padding:0 16px;
+  background:color-mix(in srgb,var(--panel) 88%,transparent);
+  backdrop-filter:saturate(1.4) blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.brand{display:flex; align-items:center; gap:9px; flex:none}
+.sig{
+  width:23px; height:23px; border-radius:6px; flex:none;
+  background:linear-gradient(135deg,var(--accent),var(--accent-ink));
+  position:relative;
+}
+.sig::after{
+  content:""; position:absolute; inset:6px; border-radius:2px;
+  border:2px solid rgba(255,255,255,.9);
+  border-right-color:transparent; border-bottom-color:transparent;
+  transform:rotate(45deg);
+}
+.brand-t{font-weight:700; font-size:13px; letter-spacing:-.01em; line-height:1.1}
+.brand-s{font-size:10px; color:var(--ink-faint); letter-spacing:.07em; text-transform:uppercase}
+.theme{
+  flex:none; margin-left:auto; width:28px; height:28px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--line); background:var(--panel-2); color:var(--ink);
+  font-size:14px; display:grid; place-items:center;
+}
+.theme:hover{border-color:var(--accent)}
+
+/* ── nav (platform tab + mode tab, single row) ── */
+.nav{
+  position:sticky; top:var(--topbar); z-index:20;
+  display:flex; align-items:center; gap:10px; padding:6px 16px; flex-wrap:wrap;
+  background:var(--panel-2); border-bottom:1px solid var(--line);
+}
+.nav-div{width:1px; height:20px; background:var(--line); flex:none}
+.seg{display:inline-flex; background:var(--bg); border:1px solid var(--line);
+  border-radius:9px; padding:2px; gap:2px}
+.seg button{
+  appearance:none; border:0; background:transparent; cursor:pointer;
+  font:inherit; font-weight:600; font-size:12.5px; color:var(--ink-soft);
+  padding:5px 14px; border-radius:7px; display:flex; align-items:center; gap:6px;
+}
+.seg button .dot{width:8px; height:8px; border-radius:50%; background:currentColor; opacity:.55}
+.seg button[data-plat="aos"]{--pc:var(--aos)}
+.seg button[data-plat="ios"]{--pc:var(--ios)}
+.seg button.on{background:var(--panel); color:var(--ink); box-shadow:var(--shadow)}
+.seg button.on .dot{background:var(--pc); opacity:1}
+.seg.mode button.on{color:var(--accent-ink)}
+
+/* ── main ── */
+main{flex:1; min-height:0; display:flex; flex-direction:column}
+.overview{padding:clamp(14px,2.4vw,26px) clamp(14px,2.2vw,22px) 40px;
+  max-width:1180px; margin:0 auto; width:100%}
+.ov-lead{margin:0 0 clamp(14px,1.8vw,22px); color:var(--ink-soft); max-width:70ch;
+  font-size:clamp(13px,1vw,15px)}
+.ov-lead b{color:var(--ink)}
+.combo-block{margin-bottom:30px}
+.combo-block[hidden]{display:none}
+.plat-head{display:flex; align-items:center; gap:11px; margin:0 0 13px; flex-wrap:wrap}
+.plat-badge{
+  font-family:var(--mono); font-weight:700; font-size:13px; letter-spacing:.02em;
+  padding:4px 11px; border-radius:8px;
+}
+.plat-badge[data-plat="aos"]{background:var(--aos-soft); color:var(--aos)}
+.plat-badge[data-plat="ios"]{background:var(--ios-soft); color:var(--ios)}
+.mode-badge{
+  font-weight:700; font-size:12px; letter-spacing:.02em;
+  padding:4px 10px; border-radius:8px; background:var(--accent-soft); color:var(--accent-ink);
+}
+.plat-head h2{margin:0; font-size:16px; letter-spacing:-.01em}
+.plat-head .sub{color:var(--ink-faint); font-size:13px}
+.grid{display:grid; gap:clamp(10px,1.2vw,15px);
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,clamp(228px,24vw,300px)),1fr))}
+.card{
+  text-align:left; font:inherit; color:inherit; cursor:pointer;
+  background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+  padding:clamp(12px,1.4vw,17px); display:flex; flex-direction:column; gap:clamp(9px,1vw,13px);
+  box-shadow:var(--shadow); transition:transform .12s ease,border-color .12s ease;
+  position:relative; overflow:hidden;
+}
+.card::before{content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--accent)}
+.card[data-plat="aos"]::before{background:var(--aos)}
+.card[data-plat="ios"]::before{background:var(--ios)}
+.card.live:hover{transform:translateY(-2px); border-color:var(--accent)}
+.card.empty{cursor:not-allowed; box-shadow:none; background:var(--panel-2)}
+.card.empty::before{background:var(--line)}
+.card-top{display:flex; align-items:flex-start; justify-content:space-between; gap:10px}
+.card-cat{font-family:var(--mono); font-weight:700; font-size:clamp(13px,1.1vw,15px); letter-spacing:.01em}
+.card-desc{color:var(--ink-faint); font-size:12.5px; margin-top:2px}
+.card-state{font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em;
+  padding:3px 9px; border-radius:20px; white-space:nowrap; flex:none}
+.card-state.ready{background:var(--accent-soft); color:var(--accent-ink)}
+.card-state.none{background:var(--panel); color:var(--ink-faint); border:1px solid var(--line)}
+.card-meta{display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--ink-soft)}
+.card-meta .k{color:var(--ink-faint)}
+.bars{display:flex; flex-direction:column; gap:7px}
+.bar-row{display:flex; align-items:center; gap:9px; font-size:12px}
+.bar-row .lab{width:44px; color:var(--ink-faint); flex:none}
+.bar{flex:1; height:7px; border-radius:4px; background:var(--panel-2); overflow:hidden; display:flex}
+.bar i{height:100%}
+.bar i.p{background:var(--pass)} .bar i.f{background:var(--fail)}
+.bar i.b{background:var(--block)} .bar i.n{background:var(--pend)}
+.bar-row .cnt{width:78px; text-align:right; color:var(--ink-soft); flex:none}
+.card-empty-note{color:var(--ink-faint); font-size:13px; line-height:1.55}
+.card-open{margin-top:auto; font-size:12.5px; font-weight:600; color:var(--accent);
+  display:flex; align-items:center; gap:5px}
+.card.empty .card-open{color:var(--ink-faint); font-weight:500}
+
+/* ── report view ── */
+.report{flex:1; min-height:0; display:none; flex-direction:column}
+.report.show{display:flex}
+.report-bar{
+  display:flex; align-items:center; gap:10px; padding:5px 16px;
+  background:var(--panel-2); border-bottom:1px solid var(--line); flex-wrap:wrap;
+}
+.back{
+  appearance:none; font:inherit; cursor:pointer; font-size:12.5px; font-weight:600;
+  padding:5px 12px; border-radius:7px; border:1px solid var(--line);
+  background:var(--panel); color:var(--ink); display:inline-flex; align-items:center; gap:5px;
+}
+.back:hover{border-color:var(--accent); color:var(--accent)}
+.report-title{font-weight:700; font-size:12.5px; display:flex; align-items:center; gap:8px}
+.report-title .chip{font-family:var(--mono); font-size:11px; font-weight:700;
+  padding:2px 8px; border-radius:6px}
+.report-title .chip[data-plat="aos"]{background:var(--aos-soft); color:var(--aos)}
+.report-title .chip[data-plat="ios"]{background:var(--ios-soft); color:var(--ios)}
+.report-frame{flex:1; min-height:0; width:100%; border:0; background:var(--bg)}
+.overview[hidden]{display:none}
+
+@media (max-width:640px){
+  .brand-box{display:none}
+  .nav{gap:10px}
+  .overview{padding:18px 14px 32px}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="sig" aria-hidden="true"></div>
+    <div class="brand-box">
+      <div class="brand-t">SDK 測試報告平台</div>
+      <div class="brand-s">Appier · LazyAdFinder</div>
+    </div>
+  </div>
+  <button class="theme" id="theme" aria-label="切換深淺色">◐</button>
+</header>
+<div class="nav">
+  <div class="seg plat" id="platseg" role="tablist" aria-label="平台"><button data-plat="aos" class=on><span class="dot"></span>AOS</button><button data-plat="ios"><span class="dot"></span>iOS</button></div>
+  <span class="nav-div" aria-hidden="true"></span>
+  <div class="seg mode" id="modeseg" role="tablist" aria-label="整合模式"><button data-mode="standalone" class=on>Standalone</button><button data-mode="mediation">Mediation</button></div>
+</div>
+<main>
+  <div class="overview" id="overview">
+    <p class="ov-lead">先用上方 <b>平台</b>與<b>整合模式</b> tab 切換，再點下方<b>分類卡片</b>
+    檢視該 round 的完整報告。每張卡的橫條為 Pass／Fail 佔比概覽。</p>
+    <section class="combo-block" data-plat="aos" data-mode="standalone"><div class="plat-head"><span class="plat-badge" data-plat="aos">AOS</span><span class="mode-badge">Standalone</span><h2>Android</h2><span class="sub">0 / 3 類別已就緒</span></div><div class="grid"><div class="card empty" data-plat="aos" data-slot="aos:standalone:aibid"><div class="card-top"><div><div class="card-cat">AIBID</div><div class="card-desc">首購 / 新客競價</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 AOS · Standalone · AIBID 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="aos" data-slot="aos:standalone:reen-static"><div class="card-top"><div><div class="card-cat">REEN-STATIC</div><div class="card-desc">再行銷 · 靜態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 AOS · Standalone · REEN-STATIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="aos" data-slot="aos:standalone:reen-dynamic"><div class="card-top"><div><div class="card-cat">REEN-DYNAMIC</div><div class="card-desc">再行銷 · 動態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 AOS · Standalone · REEN-DYNAMIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div></div></section>
+<section class="combo-block" data-plat="aos" data-mode="mediation" hidden><div class="plat-head"><span class="plat-badge" data-plat="aos">AOS</span><span class="mode-badge">Mediation</span><h2>Android</h2><span class="sub">0 / 3 類別已就緒</span></div><div class="grid"><div class="card empty" data-plat="aos" data-slot="aos:mediation:aibid"><div class="card-top"><div><div class="card-cat">AIBID</div><div class="card-desc">首購 / 新客競價</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 AOS · Mediation · AIBID 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="aos" data-slot="aos:mediation:reen-static"><div class="card-top"><div><div class="card-cat">REEN-STATIC</div><div class="card-desc">再行銷 · 靜態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 AOS · Mediation · REEN-STATIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="aos" data-slot="aos:mediation:reen-dynamic"><div class="card-top"><div><div class="card-cat">REEN-DYNAMIC</div><div class="card-desc">再行銷 · 動態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 AOS · Mediation · REEN-DYNAMIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div></div></section>
+<section class="combo-block" data-plat="ios" data-mode="standalone" hidden><div class="plat-head"><span class="plat-badge" data-plat="ios">iOS</span><span class="mode-badge">Standalone</span><h2>iOS</h2><span class="sub">0 / 3 類別已就緒</span></div><div class="grid"><div class="card empty" data-plat="ios" data-slot="ios:standalone:aibid"><div class="card-top"><div><div class="card-cat">AIBID</div><div class="card-desc">首購 / 新客競價</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 iOS · Standalone · AIBID 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="ios" data-slot="ios:standalone:reen-static"><div class="card-top"><div><div class="card-cat">REEN-STATIC</div><div class="card-desc">再行銷 · 靜態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 iOS · Standalone · REEN-STATIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="ios" data-slot="ios:standalone:reen-dynamic"><div class="card-top"><div><div class="card-cat">REEN-DYNAMIC</div><div class="card-desc">再行銷 · 動態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 iOS · Standalone · REEN-DYNAMIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div></div></section>
+<section class="combo-block" data-plat="ios" data-mode="mediation" hidden><div class="plat-head"><span class="plat-badge" data-plat="ios">iOS</span><span class="mode-badge">Mediation</span><h2>iOS</h2><span class="sub">0 / 3 類別已就緒</span></div><div class="grid"><div class="card empty" data-plat="ios" data-slot="ios:mediation:aibid"><div class="card-top"><div><div class="card-cat">AIBID</div><div class="card-desc">首購 / 新客競價</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 iOS · Mediation · AIBID 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="ios" data-slot="ios:mediation:reen-static"><div class="card-top"><div><div class="card-cat">REEN-STATIC</div><div class="card-desc">再行銷 · 靜態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 iOS · Mediation · REEN-STATIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div><div class="card empty" data-plat="ios" data-slot="ios:mediation:reen-dynamic"><div class="card-top"><div><div class="card-cat">REEN-DYNAMIC</div><div class="card-desc">再行銷 · 動態素材</div></div><span class="card-state none">尚無資料</span></div><div class="card-empty-note">此組合尚未有對應 round 的 evidence；跑完 iOS · Mediation · REEN-DYNAMIC 後會自動出現在這裡。</div><div class="card-open">待補</div></div></div></section>
+  </div>
+  <div class="report" id="report">
+    <div class="report-bar">
+      <button class="back" id="back">← 總覽</button>
+      <div class="report-title" id="rtitle"></div>
+    </div>
+    <iframe class="report-frame" id="frame" title="測試報告"
+            sandbox="allow-scripts allow-same-origin allow-popups"></iframe>
+  </div>
+</main>
+<div id="docs" hidden></div>
+<script>
+(function(){
+  var root=document.documentElement;
+  // 主題：跟報告一致，記在 localStorage
+  var tkey="ladf-platform-theme";
+  try{var saved=localStorage.getItem(tkey); if(saved)root.setAttribute("data-theme",saved);}catch(e){}
+  function curTheme(){
+    var t=root.getAttribute("data-theme");
+    return t||(matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light");
+  }
+  // 把當前主題灌進報告 iframe（報告是獨立文件，CSS 吃 :root[data-theme]）
+  function pushTheme(){
+    try{
+      var fr=document.getElementById("frame");
+      if(fr&&fr.contentDocument&&fr.contentDocument.documentElement)
+        fr.contentDocument.documentElement.setAttribute("data-theme",curTheme());
+    }catch(e){}
+  }
+  document.getElementById("theme").addEventListener("click",function(){
+    root.setAttribute("data-theme",curTheme()==="dark"?"light":"dark");
+    try{localStorage.setItem(tkey,curTheme());}catch(e){}
+    pushTheme();
+  });
+
+  var overview=document.getElementById("overview");
+  var report=document.getElementById("report");
+  var frame=document.getElementById("frame");
+  var rtitle=document.getElementById("rtitle");
+  var docsBox=document.getElementById("docs");
+  var nav=document.querySelector(".nav");
+  var loaded={};   // slot -> true 一次載入後不重灌
+  var curPlat=document.querySelector("#platseg button").getAttribute("data-plat");
+  var curMode=document.querySelector("#modeseg button").getAttribute("data-mode");
+
+  function docFor(slot){
+    var el=docsBox.querySelector('.report-src[data-slot="'+slot+'"]');
+    return el?el.getAttribute("data-doc"):null;
+  }
+  function labelOf(slot){
+    var card=document.querySelector('.card[data-slot="'+slot+'"]');
+    return card?(card.getAttribute("data-title")||""):slot.toUpperCase();
+  }
+
+  // 依 curPlat + curMode 只顯示對應的 combo-block
+  function showActiveCombo(){
+    document.querySelectorAll(".combo-block").forEach(function(s){
+      s.hidden=!(s.getAttribute("data-plat")===curPlat &&
+                 s.getAttribute("data-mode")===curMode);
+    });
+  }
+  function setPlat(pid){
+    curPlat=pid;
+    document.querySelectorAll("#platseg button").forEach(function(b){
+      b.classList.toggle("on",b.getAttribute("data-plat")===pid);
+    });
+    showActiveCombo();
+  }
+  function setMode(mid){
+    curMode=mid;
+    document.querySelectorAll("#modeseg button").forEach(function(b){
+      b.classList.toggle("on",b.getAttribute("data-mode")===mid);
+    });
+    showActiveCombo();
+  }
+
+  function openSlot(slot){
+    var doc=docFor(slot);
+    if(doc===null)return;               // 無資料格：不開
+    var seg=slot.split(":");            // [plat, mode, type]
+    var parts=labelOf(slot).split(" · ");  // [PlatLbl, ModeLbl, TypeLbl]
+    rtitle.innerHTML='<span class="chip" data-plat="'+seg[0]+'">'+(parts[0]||"")+
+      '</span>'+(parts[1]||"")+' · '+(parts[2]||"");
+    frame.onload=pushTheme;             // iframe 載入後同步當前主題
+    frame.srcdoc=doc; loaded[slot]=true;
+    // 對齊 tab 到這個報告所屬的平台/模式（回到總覽時才需要，先設好）
+    setPlat(seg[0]); setMode(seg[1]);
+    overview.hidden=true; report.classList.add("show");
+    nav.hidden=true;                    // 看報告時收起平台/模式 tab，讓出高度
+    window.scrollTo(0,0);
+  }
+  function showOverview(){
+    report.classList.remove("show"); overview.hidden=false;
+    nav.hidden=false;                   // 回總覽時把 tab 顯示回來
+    window.scrollTo(0,0);
+  }
+
+  document.querySelectorAll("#platseg button").forEach(function(b){
+    b.addEventListener("click",function(){ setPlat(b.getAttribute("data-plat")); showOverview(); });
+  });
+  document.querySelectorAll("#modeseg button").forEach(function(b){
+    b.addEventListener("click",function(){ setMode(b.getAttribute("data-mode")); showOverview(); });
+  });
+  document.querySelectorAll(".card.live").forEach(function(c){
+    c.addEventListener("click",function(){ openSlot(c.getAttribute("data-slot")); });
+  });
+  document.getElementById("back").addEventListener("click",showOverview);
+  document.addEventListener("keydown",function(e){
+    if(e.key==="Escape"&&report.classList.contains("show"))showOverview();
+  });
+
+  showActiveCombo();
+})();
+</script>
+
+</body>
+</html>

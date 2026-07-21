@@ -14,8 +14,11 @@
    - AOS → `run_ssp.py`（需 `APP_PACKAGE` / `APP_ACTIVITY`）
    - iOS → `run_ssp_ios.py`（`BUNDLE_ID=com.appier.Random`）
    > 我從工具端執行，無法回答腳本的互動 stdin；所以改由我在對話問參數、再帶環境變數跑。
-3. 跑完自動 `python build_platform.py --standalone <index>` 重產平台，並視情況部署
-   （gh-pages / Artifact）。
+3. **刷完自動執行 `./deploy_pages.sh`** —— 重產平台並部署到 GitHub Pages
+   （gh-pages 分支），線上網址即時更新。無需另發 claude.ai artifact。
+
+> ⚠️ GitHub Pages 目前是**公開**的（repo public），平台內嵌 IDFA/IDFV/裝置 MAC/
+> GPS/截圖等敏感資料 —— 使用者已知悉並選擇維持公開自動部署。
 
 ## 專案結構速查
 

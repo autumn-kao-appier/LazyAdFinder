@@ -114,10 +114,14 @@ class AppierDetector:
         # 不是 Charles/SDK 層級的必然限制。先拿掉這行實測：如果是真 pinning，
         # 這支手機下一次觸發廣告會直接連線失敗/TLS handshake error；如果不是，
         # 就能直接看到 bid_request.json 的真實內容。視結果決定要不要留著這行。
+        #   - adpolicy.appier.com：privacy icon 落地頁（TC-11），開在 WebView/Chrome，
+        #     不信任 mitmproxy CA → 攔截會 TLS 失敗、頁面被擋。passthrough 讓它正常載入
+        #     （Charles 的 sslExcludeLocations 也已排除它）；驗證改看 privacy_landing.png。
         ctx.options.ignore_hosts = [
             r".*\.apple\.com", r".*\.mzstatic\.com", r".*\.icloud\.com",
             r".*google\.com", r".*googleapis\.com",
             r".*approov.*", r".*dcard.*",
+            r".*adpolicy\.appier\.com",
         ]
 
     def request(self, flow: http.HTTPFlow) -> None:

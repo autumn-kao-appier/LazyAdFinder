@@ -208,15 +208,6 @@ MAX_AD_ATTEMPTS = int(os.environ.get("MAX_AD_ATTEMPTS", "150"))  # 0 = retry wit
 # 這類環境（模擬器新 GAID、opt-out）REEN campaign 本來就不出價
 SAVE_ON_BID = os.environ.get("SAVE_ON_BID", "0") == "1"
 
-# DO_PRIVACY_CLICK=1：capture 完成後自動點 privacy icon（TC-11）。
-# privacy icon 走 privacyInformationLink（adpolicy.appier.com），不經 xclk，
-# 無點擊費用 — 與 ALLOW_CLICK 類受控點擊不同，不需成本核准。
-DO_PRIVACY_CLICK = os.environ.get("DO_PRIVACY_CLICK", "0") == "1"
-
-# DO_E2E_FLOW=1：capture 完成後跑完整 E2E 流程並逐步截圖
-# （app 啟動→渲染→點擊手勢→落地）。測試廣告環境，點擊直接執行、不設核准 gate。
-DO_E2E_FLOW = os.environ.get("DO_E2E_FLOW", "0") == "1"
-
 # SESSION_CASE=1/2/3：user.session_duration 三情境（AND-47-1/2/3）。
 # session_duration＝使用者 App 在前景的累積時間（毫秒），不是廣告 session 載入時間。
 # 流程：命中 bid A → 情境動作 → 再觸發 bid B → 對照寫 session_case.json。
@@ -232,6 +223,11 @@ SESSION_LOGCAT_A   = "/tmp/appier_session_logcat_a.txt"
 TC_ID = sys.argv[1] if len(sys.argv) > 1 else "BASELINE"
 if SESSION_CASE and TC_ID == "BASELINE":
     TC_ID = f"AND-47-{SESSION_CASE}"   # 直接跑（不經 wizard）時自動掛對 TC
+
+# E2E 完整流程（點擊 + landing）與 privacy icon 點擊：BASELINE 一律開（baseline 本來就
+# 該跑完整 E2E 生命週期），狀態類 TC 預設關；皆可用環境變數覆蓋。需在 TC_ID 決定後才判斷。
+DO_PRIVACY_CLICK = os.environ.get("DO_PRIVACY_CLICK", "1" if TC_ID == "BASELINE" else "0") == "1"
+DO_E2E_FLOW = os.environ.get("DO_E2E_FLOW", "1" if TC_ID == "BASELINE" else "0") == "1"
 # argv 優先；未帶時吃 UDID 環境變數（wizard 就是用 env 傳；多裝置在線時必要）
 UDID  = sys.argv[2] if len(sys.argv) > 2 else (os.environ.get("UDID", "").strip() or None)
 
@@ -930,10 +926,13 @@ def do_privacy_click(driver, folder):
     # privacy icon 開的是 Appier 內建瀏覽器（AppierBrowserActivity）：BACK 出瀏覽器、
     # 返回「同一個廣告」頁（NativeBasicActivity），後續 E2E 點擊才有版位可點。
     # 不能用 am start MainActivity（回選單廣告就沒了）；也不能停在 Browser。
-    for _ in range(4):
+    # mediation 的 privacy 連結可能開 Appier 內建瀏覽器或「外部 Chrome」
+    # （com.android.chrome/ChromeTabbedActivity）；兩者都要 BACK 退出才回得到廣告頁。
+    for _ in range(5):
         focus_line = next((l for l in adb("shell", "dumpsys", "window").splitlines()
                            if "mCurrentFocus" in l), "")
-        on_browser = "BrowserActivity" in focus_line
+        on_browser = any(b in focus_line for b in
+                         ("BrowserActivity", "ChromeTabbedActivity", "com.android.chrome"))
         on_ad = APP_PACKAGE in focus_line and not on_browser and "MainActivity" not in focus_line
         if on_ad:
             break
@@ -965,19 +964,37 @@ def do_e2e_flow(driver, folder):
     adb_screencap(str(folder / "e2e_step_render.png"))
     result["steps"].append("render")
 
-    # ⑤ click：tap 廣告主圖／CTA 觸發 xclk
+    # ⑤ click：tap 廣告主圖／CTA 觸發 xclk。
+    # 可點元素在 sample app 自己的 native_ad_view 內，standalone 與 admob/applovin
+    # mediation 共用同一組 resource-id（2026-07-21 對 admob ad_ui.xml 確認）。
     before = _traffic_line_count()
-    target = None
-    for locator in ((AppiumBy.ID, f"{APP_PACKAGE}:id/native_main_image"),
-                    (AppiumBy.ID, f"{APP_PACKAGE}:id/native_cta"),
-                    (AppiumBy.ID, f"{APP_PACKAGE}:id/native_ad_view")):
-        try:
-            target = driver.find_element(*locator)
+    click_ids = ("native_main_image", "native_cta", "native_ad_view",
+                 "native_icon_image", "native_title")
+
+    def _find_ad_target():
+        for rid in click_ids:
+            try:
+                return driver.find_element(AppiumBy.ID, f"{APP_PACKAGE}:id/{rid}")
+            except Exception:
+                continue
+        return None
+
+    target = _find_ad_target()
+    # 前一步 privacy click（TC-11）可能把畫面留在瀏覽器/他處（mediation 尤其）；
+    # BACK 退回廣告頁再找，最多 4 次。
+    for _ in range(4):
+        if target is not None:
             break
-        except Exception:
-            continue
+        adb("shell", "input", "keyevent", "KEYCODE_BACK")
+        time.sleep(1.0)
+        target = _find_ad_target()
     if target is None:
-        print("  [e2e] 找不到廣告可點元素，略過點擊步驟")
+        try:
+            present = sorted(set(re.findall(r'resource-id="([^"]*native[^"]*)"',
+                                            driver.page_source)))
+        except Exception:
+            present = []
+        print(f"  [e2e] 找不到廣告可點元素，略過點擊步驟（目前畫面 native_* id：{present}）")
         with open(folder / "e2e_flow.json", "w") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         return result

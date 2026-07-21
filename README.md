@@ -15,13 +15,17 @@ Phone → Charles (8888) → mitmdump/detector.py (8081) → internet
 
 **偵測語意**（對照 appier-ads-android SDK source）：
 
-- Bid = `POST *.apx.appier.net/v2/sdk/aos/ad`（prod `ad3` / staging `adx-stg`），response **200 = 有廣告、204 = no-bid**
+- Bid = `POST *.apx.appier.net/v2/sdk/{aos,ios}/ad`（prod `ad3` / staging `adx-stg`），response **200 = 有廣告、204 = no-bid**
 - 其他 Appier 流量（imp/click tracker、`signal.appier.com` data-signal key）只記錄、不觸發停止
 - 攔到的東西寫在：`/tmp/appier_bid.json`（request）、`/tmp/appier_bid_status`（200/204）、`/tmp/appier_bid_response.json`（贏標的 response）
 
 ---
 
 ## One-time setup
+
+> 想一次弄完所有系統/裝置授權、跑自動測試時不被任何彈窗卡住，先看
+> **[PERMISSIONS.md](PERMISSIONS.md)**（Mac 的 Full Disk Access / Local
+> Network、iPhone 的信任設定，含目前這台機器的盤點結果）。
 
 ### 1. Install dependencies
 
@@ -94,7 +98,8 @@ python ~/LazyAdFinder/run_android.py 50
 ViewPager 會預載相鄰分頁（同名 label 會重複出現在 hierarchy），script 用元素座標
 過濾畫面外的重複項，不用擔心點到隔壁 tab 的。
 
-iOS 版：`python ~/LazyAdFinder/run_ios.py 50`（流程相同）。
+iOS 版：`python ~/LazyAdFinder/run_ios.py 50`（同樣支援 `STOP_ON`；另可用
+`BUNDLE_ID` 與 `AD_LABEL` 指定 sample app 和 accessibility id）。
 
 ## Run — SSP Signal QA（TC 驗證）
 
@@ -105,12 +110,21 @@ iOS 版：`python ~/LazyAdFinder/run_ios.py 50`（流程相同）。
 export APP_PACKAGE=com.appier.android.sample
 export APP_ACTIVITY=com.appier.android.sample.MainActivity
 export TEST_ROUND=R1                 # TC 表上的 round 標籤，不設就是 adhoc
+# 不設定時，執行前會依序詢問投放目的與 SDK 整合模式
+# export TEST_TYPE=reen-dynamic      # aibid / reen-static / reen-dynamic
+# export TEST_MODE=standalone        # standalone / admob-mediation / applovin-mediation
 python ~/LazyAdFinder/run_ssp.py
 
 # 狀態類 TC：把裝置調成目標狀態後單獨 capture（支援逗號多選）
 python ~/LazyAdFinder/run_ssp.py AND-04
 python ~/LazyAdFinder/run_ssp.py AND-06,AND-08
 ```
+
+互動執行會先詢問流程目標（AIBID / REEN）；REEN 會再詢問素材為 Static / Dynamic，
+最後要求輸入測試 CID。CI 或其他非互動環境請設定 `TEST_TYPE` 與 `TEST_CID`。
+執行人會自動取目前系統 username；需要代跑或在 CI 指定姓名時可設定 `TEST_EXECUTOR`。
+選擇 `admob-mediation` 或 `applovin-mediation` 時，runner 會先切換到對應的 Mediation
+分頁，再從目前畫面點擊 `TRIGGER_TEXT`；相鄰分頁預載的同名版位會自動排除。
 
 ### Evidence 結構（按 test round 分）
 
@@ -132,6 +146,31 @@ evidence/
 
 手動重算彙總：`python bid_inspector.py --round evidence/R1_20260709_180000`
 離線驗任一份 bid：`python bid_inspector.py --file /tmp/appier_bid.json [AND-04 ...]`
+
+## Run — SSP Signal QA（iOS）
+
+```bash
+brew install libimobiledevice        # ideviceinfo / idevicesyslog
+export BUNDLE_ID=com.appier.Random   # 受測 app bundle id（必填）
+export TEST_ROUND=R1                 # T1/T2（mitmdump + appium）同 Android
+python run_ssp_ios.py                # baseline；指定 TC：python run_ssp_ios.py IOS-04
+```
+
+TC 目錄在 `ios_bid_inspector.py`（IOS-xx，號碼對照 Android AND-xx；由 AOS 依 iOS 語意
+改寫：GAID→IDFA、root→jailbreak、SKAdNetwork 反轉為「應存在」…）。標 `[待校準]` 的
+條目＝欄位路徑/期望值尚未對真實 iOS bid 校準——擷到第一份 bid 後對照 capture 資料夾的
+`ios_bid_summary.txt` 修 `IOS_VALIDATORS` 再重產報告即可。evidence round 以 `IOS_` 前綴
+命名。離線驗證：`python ios_bid_inspector.py --file /tmp/appier_bid.json`。
+
+## 報告平台
+
+```bash
+python build_platform.py             # 掃 evidence 產 artifact-platform.html
+```
+
+AOS / iOS 兩入口 × AIBID / REEN-STATIC / REEN-DYNAMIC 六格；每格自動挑該分類最佳
+round（有 E2E > capture 多 > 新）內嵌完整報告，iOS round 由 `build_artifact_ios.py`
+（IOS-xx 規則）render，沒資料的格顯示「尚無資料」。
 
 ---
 

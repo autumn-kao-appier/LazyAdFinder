@@ -43,6 +43,7 @@ from appium.webdriver.common.appiumby import AppiumBy
 
 FLAG_FILE = "/tmp/appier_hit"
 BID_STATUS_FILE = "/tmp/appier_bid_status"
+BID_RESPONSE_FILE = "/tmp/appier_bid_response.json"
 NETWORK_FILE = "/tmp/current_networks"
 APP_PACKAGE = "com.appier.android.sample"
 APP_ACTIVITY = "com.appier.android.sample.MainActivity"
@@ -54,6 +55,9 @@ MAX_ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 30
 TAB = os.environ.get("TAB", "Appier SDK")
 AD_LABEL = os.environ.get("AD_LABEL", "Native - basic format")
 STOP_ON = os.environ.get("STOP_ON", "win")
+
+if STOP_ON not in ("win", "bid"):
+    sys.exit("STOP_ON 只能是 'win' 或 'bid'。")
 
 
 def detect_udid():
@@ -130,7 +134,7 @@ def read_bid_status():
 
 
 # 清掉上一次的 flag / network 紀錄
-for f in (FLAG_FILE, BID_STATUS_FILE, NETWORK_FILE):
+for f in (FLAG_FILE, BID_STATUS_FILE, BID_RESPONSE_FILE, NETWORK_FILE):
     if os.path.exists(f):
         os.remove(f)
 
@@ -151,7 +155,7 @@ try:
     for i in range(1, MAX_ROUNDS + 1):
         ensure_on_list(driver)
 
-        for f in (FLAG_FILE, BID_STATUS_FILE, NETWORK_FILE):
+        for f in (FLAG_FILE, BID_STATUS_FILE, BID_RESPONSE_FILE, NETWORK_FILE):
             if os.path.exists(f):
                 os.remove(f)
 

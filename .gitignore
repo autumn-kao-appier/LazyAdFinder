@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 .DS_Store
 /tmp/appier_hit
+.claude/settings.local.json
+
+# 生成物與測試資料（不進 repo；報告平台部署在 gh-pages）
+artifact-*.html
+evidence/

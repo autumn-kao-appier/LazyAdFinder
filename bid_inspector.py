@@ -118,7 +118,7 @@ ZERO_UUID    = "00000000-0000-0000-0000-000000000000"
 
 # ── validator dispatch ────────────────────────────────────────────────────────
 
-def run_validator(bid, v):
+def run_validator(bid, v, reference_ms=None):
     """Returns (passed: bool, actual, message: str)."""
     field = v["field"]
     check = v["check"]
@@ -151,6 +151,12 @@ def run_validator(bid, v):
             return True, value, f"= {exp!r} ✓"
         return False, value, f"expected {exp!r} or absent"
 
+    if check == "int_zero_or_absent":
+        if not found or value is None:
+            return True, value, "absent ✓"
+        return ((True, value, "= 0 ✓") if type(value) is int and value == 0
+                else (False, value, "expected integer 0 or absent"))
+
     if check == "falsy":
         if not found or not value:
             return True, value, "falsy/absent ✓"
@@ -158,6 +164,24 @@ def run_validator(bid, v):
 
     if not found or value is None:
         return False, None, "field missing"
+
+    if check == "uuid_nonzero":
+        ok = isinstance(value, str) and bool(UUID_RE.fullmatch(value)) and value != ZERO_UUID
+        return ((True, value, "valid non-zero UUID ✓") if ok
+                else (False, value, "expected lowercase non-zero UUID"))
+
+    if check == "one_of_typed":
+        allowed = v["expected"]
+        ok = any(type(value) is type(exp) and value == exp for exp in allowed)
+        return ((True, value, f"one of {allowed!r} ✓") if ok
+                else (False, value, f"expected one of {allowed!r} with exact type"))
+
+    if check == "vpn_active":
+        # backend 定義 device.ext.vpn 為 string：VPN on 應為非空協定字串，
+        # 不接受 boolean（型別錯本身就是 fail）
+        ok = isinstance(value, str) and bool(value.strip())
+        return ((True, value, "non-empty VPN protocol string ✓") if ok
+                else (False, value, "expected non-empty protocol string (backend type = string)"))
 
     if check == "value":
         exp = v["expected"]
@@ -197,6 +221,22 @@ def run_validator(bid, v):
         except (TypeError, ValueError):
             return False, value, "not numeric"
 
+    if check == "int_range":
+        lo, hi = v["min"], v["max"]
+        ok = type(value) is int and lo <= value <= hi
+        return ((True, value, f"integer in [{lo}, {hi}] ✓") if ok
+                else (False, value, f"expected integer in [{lo}, {hi}]"))
+
+    if check == "nonzero_range":
+        try:
+            n = float(value)
+            lo, hi = v["min"], v["max"]
+            ok = lo <= n <= hi and n != 0
+            return ((True, value, f"non-zero in [{lo}, {hi}] ✓") if ok
+                    else (False, value, f"expected non-zero in [{lo}, {hi}]"))
+        except (TypeError, ValueError):
+            return False, value, "not numeric"
+
     if check == "positive_int":
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             return True, value, "> 0 ✓"
@@ -225,17 +265,29 @@ def run_validator(bid, v):
     if check == "truthy":
         return (True, value, "truthy ✓") if value else (False, value, "expected truthy")
 
+    # 陣列類：actual 一律回傳實際內容（讓報告看得到值），數量寫進 message；
+    # 過長的內容由 build_artifact.fmt_val 自動截斷，不會撐破卡面
     if check == "array_nonempty":
         if isinstance(value, list) and value:
-            return True, f"[{len(value)} items]", "non-empty ✓"
+            return True, value, f"non-empty（{len(value)} 筆）✓"
         return False, value, "expected non-empty array"
+
+    if check == "array":
+        return ((True, value, f"array（{len(value)} 筆）✓") if isinstance(value, list)
+                else (False, value, "expected array"))
+
+    if check == "array_timestamp":
+        ok = (isinstance(value, list) and bool(value) and
+              all(type(x) is int and len(str(x)) == 13 for x in value))
+        return ((True, value, f"{len(value)} 個 13-digit ms timestamps ✓") if ok
+                else (False, value, "expected non-empty array of 13-digit integer timestamps"))
 
     if check == "array_regex":
         if not isinstance(value, list) or not value:
             return False, value, "expected non-empty array"
         bad = [x for x in value if not isinstance(x, str) or not v["pattern"].match(x)]
         if not bad:
-            return True, f"[{len(value)} items]", f"all match ✓"
+            return True, value, f"{len(value)} 筆全部符合格式 ✓"
         return False, value, f"invalid: {bad}"
 
     if check == "array_number":
@@ -243,7 +295,7 @@ def run_validator(bid, v):
             return False, value, "expected non-empty array"
         bad = [x for x in value if not isinstance(x, (int, float)) or isinstance(x, bool)]
         if not bad:
-            return True, f"[{len(value)} values]", "numeric ✓"
+            return True, value, f"{len(value)} 個數值 ✓"
         return False, value, f"{len(bad)} non-numeric elements"
 
     if check == "array_impression":
@@ -253,7 +305,7 @@ def run_validator(bid, v):
                     "clicktime", "backgroundtime", "storeviewtime"}
         bad = [e for e in value if not isinstance(e, dict) or not required.issubset(e)]
         if not bad:
-            return True, f"[{len(value)} impressions]", "structure ✓"
+            return True, value, f"{len(value)} 筆 impression 結構正確 ✓"
         return False, value, f"{len(bad)} elements missing keys"
 
     if check == "leq_field":
@@ -261,16 +313,27 @@ def run_validator(bid, v):
         if not ref_found or ref is None:
             return False, value, f"ref {v['ref_field']} not found"
         try:
-            if float(value) <= float(ref):
+            if type(value) is int and type(ref) is int and 0 <= value <= ref:
                 return True, value, f"<= {v['ref_field']}={ref} ✓"
             return False, value, f"{value} > {v['ref_field']}={ref}"
         except (TypeError, ValueError):
             return False, value, "not numeric"
 
+    if check == "equals_field":
+        ref, ref_found = get_field(bid, v["ref_field"])
+        if not ref_found:
+            return False, value, f"ref {v['ref_field']} not found"
+        ok = type(value) is type(ref) and value == ref
+        return ((True, value, f"= {v['ref_field']} ({ref!r}) ✓") if ok
+                else (False, value, f"expected same as {v['ref_field']}={ref!r}"))
+
     if check == "timestamp_recent":
         try:
+            if type(value) is not int or len(str(value)) != 13:
+                return False, value, "expected 13-digit integer ms timestamp"
             ts_sec = int(value) / 1000
-            diff = abs(time.time() - ts_sec)
+            reference_sec = reference_ms / 1000 if reference_ms is not None else time.time()
+            diff = abs(reference_sec - ts_sec)
             if diff < 120:
                 return True, value, f"within {int(diff)}s ✓"
             return False, value, f"{int(diff)}s off from now"
@@ -284,98 +347,118 @@ def run_validator(bid, v):
 
 VALIDATORS = [
     # ── A. Core Identifiers
-    {"tc": "AND-01", "field": "device.ia",  "check": "regex", "pattern": UUID_RE, "note": "GAID opt-in → device.ia 為合法 UUID 且非全零（採集＋格式一次驗完，原 AND-28 已併入）；需 Google Play Services"},
+    {"tc": "AND-01", "field": "device.ia", "check": "uuid_nonzero", "note": "GAID opt-in → lowercase valid UUID and not all-zero"},
+    {"tc": "AND-28", "field": "device.ia", "check": "regex", "pattern": UUID_RE, "note": "GAID UUID format: lowercase 8-4-4-4-12"},
     {"tc": "AND-02", "field": "device.ia",  "check": "value_or_absent", "expected": ZERO_UUID, "note": "GAID opt-out → 全零 UUID 或缺席（AND-01 的相反狀態）"},
     {"tc": "AND-03", "field": "device.ifv", "check": "regex", "pattern": UUID_RE, "note": "App Set ID device.ifv 為合法 UUID（採集＋格式一次驗完，原 AND-29 已併入）；跨啟動穩定性手動確認"},
-    {"tc": "AND-75", "field": "device.lat", "check": "falsy", "note": "tracking allowed → 0 or absent; must stay consistent with device.ia opt-in (AND-01)"},
+    {"tc": "AND-29", "field": "device.ifv", "check": "regex", "pattern": UUID_RE, "note": "App Set ID UUID format: lowercase 8-4-4-4-12"},
+    {"tc": "AND-75", "field": "device.lat", "check": "int_zero_or_absent", "note": "tracking allowed → integer 0 or absent"},
     {"tc": "AND-76", "field": "device.lat", "check": "value", "expected": 1, "note": "tracking denied → must be 1, not absent; must stay consistent with device.ia opt-out (AND-02)"},
     # ── B. Device State - Bool
     {"tc": "AND-04", "field": "device.ext.darkmode",      "check": "value", "expected": True},
     {"tc": "AND-05", "field": "device.ext.darkmode",      "check": "value", "expected": False},
-    {"tc": "AND-06", "field": "device.charging",          "check": "value", "expected": 1, "note": "SDK sends int 0/1 (SignalSerializer.booleanToInt), matching swagger — sheet's boolean expectation is stale, update sheet"},
-    {"tc": "AND-07", "field": "device.charging",          "check": "value", "expected": 0, "note": "see AND-06 type note"},
+    {"tc": "AND-06", "field": "device.charging", "check": "one_of_typed", "expected": [1, True], "note": "charging → integer 1 or boolean true"},
+    {"tc": "AND-07", "field": "device.charging", "check": "one_of_typed", "expected": [0, False], "note": "not charging → integer 0 or boolean false"},
     {"tc": "AND-08", "field": "device.ext.battery_saver", "check": "value", "expected": True},
     {"tc": "AND-09", "field": "device.ext.battery_saver", "check": "value", "expected": False},
     {"tc": "AND-10", "field": "device.ext.jailbreak",     "check": "value", "expected": False, "note": "Blocked — test device is rooted; needs non-root device or non-rooted AVD"},
     {"tc": "AND-11", "field": "device.ext.jailbreak",     "check": "value", "expected": True},
     {"tc": "AND-12", "field": "device.ext.emulator",      "check": "value", "expected": True,  "note": "AVD"},
     {"tc": "AND-13", "field": "device.ext.emulator",      "check": "value", "expected": False, "note": "real device"},
-    {"tc": "AND-14", "field": "device.ext.vpn", "check": "truthy", "note": "SDK hardcodes vpn=null (SignalSerializer) — will FAIL until RD implements VPN detection"},
-    {"tc": "AND-15", "field": "device.ext.vpn", "check": "falsy",  "note": "VPN inactive — false or absent (passes trivially while SDK hardcodes null)"},
+    {"tc": "AND-14", "field": "device.ext.vpn", "check": "vpn_active", "note": "VPN active → 非空協定字串（backend 型別＝string）"},
+    {"tc": "AND-15", "field": "device.ext.vpn", "check": "absent_or_empty", "note": "VPN inactive → absent, empty, or null per approved standard"},
     # ── C. Device State - Numeric
     {"tc": "AND-16", "field": "device.batterylevel",      "check": "value", "expected": 100},
     {"tc": "AND-17", "field": "device.batterylevel",      "check": "value", "expected": 0},
-    {"tc": "AND-19", "field": "device.ext.screen_bright", "check": "value", "expected": 0.0},
-    {"tc": "AND-20", "field": "device.ext.screen_bright", "check": "value", "expected": 1.0},
+    {"tc": "AND-19", "field": "device.ext.screen_bright", "check": "range", "min": 0.0, "max": 0.1},
+    {"tc": "AND-20", "field": "device.ext.screen_bright", "check": "range", "min": 0.9, "max": 1.0},
     {"tc": "AND-21", "field": "device.ext.fontscale",     "check": "value", "expected": 1.0},
     {"tc": "AND-22", "field": "device.ext.fontscale",     "check": "value", "expected": 1.5},
     {"tc": "AND-23", "field": "device.ext.volume",        "check": "value", "expected": 0.0, "note": "STREAM_MUSIC confirmed in DisplayCollector; value = volume/max as 0.0-1.0 float"},
     {"tc": "AND-24", "field": "device.ext.volume",        "check": "value", "expected": 1.0},
     {"tc": "AND-25", "field": "device.utcoffset", "check": "value", "expected": 480,  "note": "Asia/Taipei UTC+8"},
-    {"tc": "AND-26", "field": "device.utcoffset", "check": "range", "min": -300, "max": -240, "note": "America/New_York EST/EDT"},
+    {"tc": "AND-26", "field": "device.utcoffset", "check": "one_of_typed", "expected": [-240, -300], "note": "America/New_York EDT/EST only"},
     {"tc": "AND-27", "field": "device.utcoffset", "check": "value", "expected": 0,    "note": "UTC"},
     # ── D. Device / App State - Format
     {"tc": "AND-30", "field": "device.lang",       "check": "regex", "pattern": ISO639_RE, "note": "ISO-639-1 2-char lowercase, no region suffix"},
-    {"tc": "AND-31", "field": "device.langb",      "check": "regex", "pattern": BCP47_RE,  "note": "BCP47 e.g. en-US"},
+    {"tc": "AND-31", "field": "device.langb",      "check": "value", "expected": "en-US", "note": "baseline language English + region United States"},
     {"tc": "AND-32", "field": "device.input_lang", "check": "array_regex", "pattern": INPUT_LANG_RE, "note": "keyboard input languages, not display language; IME subtype locales may use underscores (en_US)"},
     {"tc": "AND-33", "field": "app.ver", "check": "regex", "pattern": SEMVER_RE, "note": "semver, no v-prefix"},
     {"tc": "AND-34", "field": "app.displaymanager",    "check": "nonempty", "note": "SDK currently sends placeholder \"appier\" (SignalSerializer TODO — backend meaning unconfirmed)"},
     {"tc": "AND-35", "field": "app.displaymanagerver", "check": "nonempty", "note": "SDK sends data-signal BuildConfig.VERSION_NAME (placeholder per serializer TODO)"},
     {"tc": "AND-36", "field": "device.make",  "check": "nonempty_notunknown"},
     {"tc": "AND-37", "field": "device.model", "check": "nonempty_notunknown"},
-    {"tc": "AND-38", "field": "device.ip",    "check": "ipv4_nonzero", "note": "SDK hardcodes ip=null (server derives IP) — validate via Production Echo Server (adx.apx.appier.net), not the bid body; FAIL here is expected"},
+    {"tc": "AND-38", "field": "device.ip",    "check": "ipv4_nonzero", "note": "Blocked / not in this release per approved standard"},
     {"tc": "AND-39", "field": "device.ipv6",  "check": "nonempty", "note": "SDK hardcodes ipv6=null — same server-side story as AND-38. Also Blocked — needs 4G/5G SIM device; echo server (adx6.apx.appier.net) is ready."},
-    {"tc": "AND-40", "field": "device.conntype", "check": "value", "expected": "wifi", "note": "SDK sends string enum (SignalSerializer.mapConnectionType), matching swagger — sheet's OpenRTB int codes are stale, update sheet"},
+    {"tc": "AND-40", "field": "device.conntype", "check": "value", "expected": "wifi", "note": "SignalSerializer maps internal enum 2 to payload string 'wifi'"},
     {"tc": "AND-41", "field": "device.conntype", "check": "regex", "pattern": CELL_4G5G_RE, "note": "cellular_4g / cellular_5g — see AND-40 type note. Blocked — no SIM device available on team yet"},
-    {"tc": "AND-66", "field": "app.bundle",      "check": "nonempty", "note": "compare against known test app applicationId"},
-    {"tc": "AND-67", "field": "app.sdk_version", "check": "nonempty", "note": "in ext this is the DATA-SIGNAL SDK version (argus BuildConfig), not ads SDK 2.2.0 (ADQA-1857) — ads SDK version lives at req.app.sdk_version"},
+    {"tc": "AND-66", "field": "app.bundle", "check": "value", "expected": "com.appier.android.sample"},
+    {"tc": "AND-67", "field": "ext.app.sdk_version", "root": "raw", "check": "equals_field", "ref_field": "req.app.sdk_version", "note": "must equal the SDK version used by this build"},
     {"tc": "AND-68", "field": "device.type", "check": "nonempty", "note": "SDK sends \"phone\" or \"tablet\" (DeviceInfoCollector.getDeviceType, screenLayout-based)"},
     {"tc": "AND-69", "field": "device.os",   "check": "regex", "pattern": ANDROID_OS_RE, "note": "SDK sends exactly \"Android\" (SignalSerializer)"},
     {"tc": "AND-70", "field": "device.osv",  "check": "nonempty", "note": "compare against device's actual OS version manually"},
     {"tc": "AND-71", "field": "device.hwv",  "check": "nonempty", "note": "SDK maps hwv = Build.MODEL (same value as device.model) — flag to RD if sheet expects Build.HARDWARE"},
-    {"tc": "AND-73", "field": "device.country", "check": "nonempty", "note": "confirm expected format (ISO 3166-1 alpha-2/alpha-3) with RD"},
+    {"tc": "AND-73", "field": "device.country", "check": "value", "expected": "tw", "note": "device region Taiwan; observed SDK format lowercase alpha-2"},
     {"tc": "AND-74", "field": "device.locale",  "check": "nonempty", "note": "confirm overlap with device.langb with RD"},
     # ── E. Device State - Arrays
     {"tc": "AND-42", "field": "device.ext.gyroscope",     "check": "array_number", "note": "SDK hardcodes [] (collector not implemented) — will FAIL until RD implements"},
     {"tc": "AND-43", "field": "device.ext.accelerometer", "check": "array_number", "note": "SDK hardcodes [] (collector not implemented) — will FAIL until RD implements"},
-    {"tc": "AND-44", "field": "device.ext.boottime",      "check": "positive_int", "note": "epoch-ms of most recent boot event (BootEventCollector, lastOrNull); null when no boot records yet"},
+    {"tc": "AND-44", "field": "device.ext.boottime",      "check": "array_timestamp", "note": "BootEventCollector bootTimestampsMs: JSON array of 1–5 epoch-ms boot timestamps"},
     # ── F. Geolocation
-    {"tc": "AND-45", "field": "device.geo_lat", "check": "range",  "min": -90.0, "max": 90.0,   "note": "GPS granted"},
-    {"tc": "AND-45", "field": "device.geo_lon", "check": "range",  "min": -180.0, "max": 180.0,  "note": "GPS granted"},
+    {"tc": "AND-45", "field": "device.geo_lat", "check": "nonzero_range", "min": -90.0, "max": 90.0, "note": "GPS granted"},
+    {"tc": "AND-45", "field": "device.geo_lon", "check": "nonzero_range", "min": -180.0, "max": 180.0, "note": "GPS granted"},
     {"tc": "AND-46", "field": "device.geo_lat", "check": "absent", "note": "P0 — GPS denied → lat absent"},
     {"tc": "AND-46", "field": "device.geo_lon", "check": "absent", "note": "P0 — GPS denied → lon absent"},
     # ── G. In-Session
-    {"tc": "AND-47", "field": "user.session_duration",     "check": "range", "min": 30_000, "max": 99_999_000, "note": "ms (AppLifecycleTracker) — sheet's 30-99999 assumed seconds, update sheet"},
-    {"tc": "AND-48", "field": "user.session_duration",     "check": "range", "min": 0,  "max": 5_000, "note": "cold start; ms"},
+    # session_duration 語意（2026-07-17 更新）＝使用者 App 在前景的累積時間（毫秒，
+    # AppLifecycleTracker；iOS 實作即此語意，正確），不是「廣告 session 載入時間」。
+    # 行為單一 bid 驗不了 → 原 AND-47 拆成三個跨 bid 對照情境
+    # （run_ssp SESSION_CASE=1/2/3 抓 bid A→動作→bid B，落地 session_case.json；
+    #  判定在 run_ssp 當下算、報告由 build_artifact 讀 session_case.json 呈現）：
+    {"tc": "AND-47-1", "field": "user.session_duration", "check": "session_case", "case": 1,
+     "note": "進廣告 → 只關廣告頁（App 全程前景）→ 下一 bid 的 session 累進（B > A）"},
+    {"tc": "AND-47-2", "field": "user.session_duration", "check": "session_case", "case": 2,
+     "note": "進廣告 → 關整個 App（force-stop）重開 → session 重置（B < A）"},
+    {"tc": "AND-47-3", "field": "user.session_duration", "check": "session_case", "case": 3,
+     "note": "進廣告 → App 退背景再切回前景 → 下一 bid 的 session 累進（B > A）"},
+    {"tc": "AND-48", "field": "user.session_duration", "check": "int_range", "min": 0, "max": 4, "note": "approved standard: cold-start integer <5"},
     {"tc": "AND-49", "field": "user.app_init_time",        "check": "timestamp_recent"},
-    {"tc": "AND-50", "field": "user.last_foreground_time", "check": "array_nonempty"},
-    {"tc": "AND-50", "field": "user.last_background_time", "check": "array_nonempty"},
+    {"tc": "AND-50", "field": "user.last_foreground_time", "check": "array_timestamp"},
+    {"tc": "AND-50", "field": "user.last_background_time", "check": "array_timestamp"},
     {"tc": "AND-51", "field": "user.impression_history",   "check": "array_impression", "note": "SDK hardcodes [] (not implemented) — will FAIL until RD implements"},
-    {"tc": "AND-52", "field": "user.app_duration",         "check": "range", "min": 30_000, "max": 99_999_000, "note": "ms (foregroundTimeMs)"},
+    {"tc": "AND-52", "field": "user.app_duration", "check": "int_range", "min": 30, "max": 99_999_000, "note": "approved standard: >=30 integer"},
     # ── H. Memory / Disk
-    {"tc": "AND-53", "field": "device.ext.mem_total",     "check": "range",     "min": 2 * 1024**3,  "max": 16 * 1024**3,  "note": "bytes (MemoryStorageCollector) — sheet's MB range is stale, update sheet"},
+    {"tc": "AND-53", "field": "device.ext.mem_total",     "check": "positive_int", "note": "standard labels MB but observed values are bytes; preserve actual and flag unit discrepancy"},
     {"tc": "AND-54", "field": "device.ext.mem_available", "check": "leq_field", "ref_field": "device.ext.mem_total"},
-    {"tc": "AND-55", "field": "device.ext.disk_total",    "check": "range",     "min": 32 * 1024**3, "max": 512 * 1024**3, "note": "bytes — sheet's MB range is stale, update sheet"},
+    {"tc": "AND-55", "field": "device.ext.disk_total",    "check": "positive_int", "note": "standard labels MB but observed values are bytes; preserve actual and flag unit discrepancy"},
     {"tc": "AND-56", "field": "device.ext.disk_free",     "check": "leq_field", "ref_field": "device.ext.disk_total"},
     # ── I. Screen / Display
     {"tc": "AND-57", "field": "device.sw",      "check": "positive_int"},
     {"tc": "AND-58", "field": "device.sh",      "check": "positive_int"},
     {"tc": "AND-59", "field": "device.ppi",     "check": "positive_int"},
-    {"tc": "AND-60", "field": "device.pxratio", "check": "positive_float", "note": "typical 2.0-3.5, no fixed upper bound"},
+    {"tc": "AND-60", "field": "device.pxratio", "check": "range", "min": 2.0, "max": 3.5, "note": "approved standard typical range 2.0-3.5"},
     # ── K. Network Latency
     {"tc": "AND-61", "field": "device.ext.latency", "check": "positive_int", "note": "SDK hardcodes latency=null. Also Blocked — Echo Server endpoint only returns IP, no latency measurement available yet"},
     # ── J. Negative / Absent
-    {"tc": "AND-62", "field": "device.ext.applist",    "check": "present", "note": "RD 定：SDK 採集 applist 為可接受行為，能拿多少算多少、拿不到也 OK → 只確認欄位存在即可"},
-    {"tc": "AND-63", "field": "device.ext.iaphistory", "check": "absent", "note": "same always-emitted-key issue as AND-62"},
+    {"tc": "AND-62", "field": "device.ext.applist",    "check": "array_nonempty", "note": "InstalledAppCollector output; backend mapping requires launcher-visible package array"},
+    {"tc": "AND-63", "field": "device.ext.iaphistory", "check": "array", "note": "Serializer emits merged purchase/subscription product ID array; [] is valid when none"},
     {"tc": "AND-64", "field": "device.carrier", "check": "absent_or_empty", "note": "no SIM; Blocked — confirm SIM simulation capability with RD"},
     {"tc": "AND-64", "field": "device.mccmnc",  "check": "absent_or_empty", "note": "no SIM"},
-    {"tc": "AND-65", "field": "app.ext.islatestver", "check": "absent", "note": "app.ext doesn't exist at all in v2 schema — trivially absent; presence would indicate schema mismatch"},
     {"tc": "AND-72", "field": "device.operator",      "check": "absent_or_empty", "note": "no SIM"},
     {"tc": "AND-72", "field": "device.operator_name", "check": "absent_or_empty", "note": "no SIM"},
     # ── M. SKAdNetwork
     {"tc": "AND-81", "field": "skadn.sourceapp",  "check": "absent", "note": "SKAdNetwork is iOS-only; Android should never send this"},
     {"tc": "AND-81", "field": "skadn.versions",   "check": "absent", "note": "SKAdNetwork is iOS-only; Android should never send this"},
     {"tc": "AND-81", "field": "skadn.skadnetids", "check": "absent", "note": "SKAdNetwork is iOS-only; Android should never send this"},
+    # ── L. Privacy Compliance (raw request under req.compliance)
+    {"tc": "AND-77", "field": "req.compliance.gdpr_applies", "root": "raw", "check": "value", "expected": 1},
+    {"tc": "AND-78", "field": "req.compliance.force_gdpr_applies", "root": "raw", "check": "value", "expected": 0, "note": "Sample App setGDPRApplies(true) resets force override to false"},
+    {"tc": "AND-79", "field": "req.compliance.current_consent_status", "root": "raw", "check": "value", "expected": 1, "note": "Sample App explicitly sets ConsentStatus.EXPLICIT_YES"},
+    {"tc": "AND-80", "field": "req.compliance.coppa_applies", "root": "raw", "check": "value", "expected": 1},
+    # ── N. Request Envelope
+    {"tc": "AND-82", "field": "req_ver", "root": "raw", "check": "value", "expected": 2},
+    {"tc": "AND-83", "field": "zone_id", "root": "raw", "check": "value", "expected": "5904"},
+    {"tc": "AND-84", "field": "test_mode", "root": "raw", "check": "absent", "note": "Sample App sets TestMode.FALSE; builder omits test_mode"},
 ]
 
 
@@ -386,13 +469,18 @@ def _trunc(val, n=38):
     return (s[:n] + "…") if len(s) > n else s
 
 
-def run_inspection(bid, tc_filter=None):
+def run_inspection(bid, tc_filter=None, reference_ms=None):
     root = _unwrap(bid)
     results = []
     for v in VALIDATORS:
         if tc_filter and v["tc"] not in tc_filter:
             continue
-        passed, actual, msg = run_validator(root, v)
+        if v["check"] == "session_case":
+            # 跨 bid 對照（bid A vs bid B），單一 bid 無法判定：
+            # 判定由 run_ssp 於 capture 當下寫入 session_case.json，報告端讀該檔
+            continue
+        source = bid if v.get("root") == "raw" else root
+        passed, actual, msg = run_validator(source, v, reference_ms=reference_ms)
         results.append({
             "tc":     v["tc"],
             "field":  v["field"],

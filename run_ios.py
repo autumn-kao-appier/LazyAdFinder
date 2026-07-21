@@ -1,14 +1,20 @@
 """
 用法:
-    python run.py [最多幾輪，預設 30] [UDID]
+    python run_ios.py [最多幾輪，預設 30] [UDID]
 
     UDID 省略時自動偵測唯一連接的 iPhone。
-    多台裝置時必須指定：python run.py 30 00008030-xxxx
+    多台裝置時必須指定：python run_ios.py 30 00008030-xxxx
 
 前置：
     pip install Appium-Python-Client
     appium（另開 terminal: appium）
     手機 Wi-Fi proxy 設為 Mac IP:8888（跟 Charles 同 port）
+
+環境變數（選填）：
+    BUNDLE_ID   sample app bundle id，預設 "com.appier.Random"
+    AD_LABEL    要點擊的 accessibility id，預設 "basic"
+    STOP_ON     "win"（預設）= bid response 200 才停；204 no-bid 繼續。
+                "bid" = 只要看到 bid request 就停。
 """
 
 import os
@@ -21,12 +27,20 @@ from appium import webdriver
 from appium.options.ios.xcuitest.base import XCUITestOptions
 
 FLAG_FILE = "/tmp/appier_hit"
+BID_STATUS_FILE = "/tmp/appier_bid_status"
+BID_RESPONSE_FILE = "/tmp/appier_bid_response.json"
 NETWORK_FILE = "/tmp/current_networks"
-BUNDLE_ID = "com.appier.Random"
+BUNDLE_ID = os.environ.get("BUNDLE_ID", "com.appier.Random")
+AD_LABEL = os.environ.get("AD_LABEL", "basic")
+STOP_ON = os.environ.get("STOP_ON", "win")
 APPIUM_SERVER = "http://127.0.0.1:4723"
 AD_TIMEOUT_SEC = 5.0
+BID_STATUS_WAIT_SEC = 2.0
 AD_POLL_INTERVAL = 0.1
 MAX_ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 30
+
+if STOP_ON not in ("win", "bid"):
+    sys.exit("STOP_ON 只能是 'win' 或 'bid'。")
 
 # 真機簽 WebDriverAgent 用的 Apple Development Team ID（cert 的 OU 欄位）。
 # 用環境變數帶進來，不寫死在 repo 裡：
@@ -49,17 +63,17 @@ def detect_udid():
     if not udids:
         sys.exit("找不到連接的 iPhone，請接上手機或手動指定 UDID。")
     if len(udids) > 1:
-        sys.exit(f"偵測到多台裝置：{udids}\n請執行：python run.py {MAX_ROUNDS} <UDID>")
+        sys.exit(f"偵測到多台裝置：{udids}\n請執行：python run_ios.py {MAX_ROUNDS} <UDID>")
     print(f"[device] {udids[0]}")
     return udids[0]
 
 
 def ensure_on_list(driver):
-    """確保停在 list 頁：找得到 basic 就代表在 list，找不到就 driver.back() 退回。
+    """確保停在 list 頁：找得到 AD_LABEL 就代表在 list，找不到就 driver.back() 退回。
     這個 app 的返回鍵沒有固定的 accessibility id，用 driver.back() 比較穩。"""
-    for _ in range(3):
+    for _ in range(4):
         try:
-            driver.find_element("accessibility id", "basic")
+            driver.find_element("accessibility id", AD_LABEL)
             return
         except Exception:
             try:
@@ -69,8 +83,19 @@ def ensure_on_list(driver):
                 return
 
 
-# 清掉上一次的 flag / network 紀錄
-for f in (FLAG_FILE, NETWORK_FILE):
+def read_bid_status():
+    """等 bid response 回來，回傳 status code 字串或 None。"""
+    deadline = time.monotonic() + BID_STATUS_WAIT_SEC
+    while time.monotonic() < deadline:
+        if os.path.exists(BID_STATUS_FILE):
+            with open(BID_STATUS_FILE) as f:
+                return f.read().strip()
+        time.sleep(AD_POLL_INTERVAL)
+    return None
+
+
+# 清掉上一次的 capture 紀錄
+for f in (FLAG_FILE, BID_STATUS_FILE, BID_RESPONSE_FILE, NETWORK_FILE):
     if os.path.exists(f):
         os.remove(f)
 
@@ -92,6 +117,10 @@ if XCODE_ORG_ID:
 driver = webdriver.Remote(APPIUM_SERVER, options=options)
 
 try:
+    print(f"[bundle] {BUNDLE_ID}")
+    print(f"[label ] {AD_LABEL}")
+    print(f"[stop  ] {STOP_ON}")
+
     # 一開始先確保停在 list（app 可能停在廣告頁）
     ensure_on_list(driver)
 
@@ -99,14 +128,15 @@ try:
         # 每輪先確保回到 list 頁（不管上一輪停在哪）
         ensure_on_list(driver)
 
-        if os.path.exists(NETWORK_FILE):
-            os.remove(NETWORK_FILE)
+        for f in (FLAG_FILE, BID_STATUS_FILE, BID_RESPONSE_FILE, NETWORK_FILE):
+            if os.path.exists(f):
+                os.remove(f)
 
-        print(f"[{i}/{MAX_ROUNDS}] tapping basic ...")
+        print(f"[{i}/{MAX_ROUNDS}] tapping '{AD_LABEL}' ...")
         try:
-            driver.find_element("accessibility id", "basic").click()
+            driver.find_element("accessibility id", AD_LABEL).click()
         except Exception:
-            print(f"[{i}] 找不到 basic，重試")
+            print(f"[{i}] 找不到 '{AD_LABEL}'，重試")
             continue
 
         deadline = time.monotonic() + AD_TIMEOUT_SEC
@@ -128,8 +158,21 @@ try:
             print(f"         → (mitmdump 沒收到流量，確認 Charles upstream proxy 設為 127.0.0.1:8081)")
 
         if os.path.exists(FLAG_FILE):
-            hit = open(FLAG_FILE).read().strip()
-            print(f"\n[STOP] Appier detected — {hit}")
+            with open(FLAG_FILE) as f:
+                hit = f.read().strip()
+            status = read_bid_status()
+            if status == "200":
+                print(f"\n[STOP] Appier ad WON (bid 200) — {hit}")
+                print("       request: /tmp/appier_bid.json  response: /tmp/appier_bid_response.json")
+                break
+            if status == "204":
+                if STOP_ON == "bid":
+                    print(f"\n[STOP] Appier bid request (204 no-bid) — {hit}")
+                    break
+                print("         → Appier bid 204 no-bid，繼續")
+                continue
+            # response 沒等到可能是 proxy/連線異常；避免把未知狀態當 no-bid。
+            print(f"\n[STOP] Appier bid request (response 未確認) — {hit}")
             break
     else:
         print(f"\n[DONE] {MAX_ROUNDS} 輪都沒出現 Appier ad。")

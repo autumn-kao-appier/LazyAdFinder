@@ -1175,19 +1175,31 @@ def save_evidence(driver, ts):
     except Exception as exc:
         print(f"  [warn] ad_ui dump 失敗：{exc}")
 
-    # 1a-2. TC-11 privacy icon 自動點擊（免點擊費用；要在 traffic.jsonl 歸檔前做）
-    if DO_PRIVACY_CLICK:
-        try:
-            do_privacy_click(driver, folder)
-        except Exception as exc:
-            print(f"  [warn] privacy click 失敗（不影響其他證據）：{exc}")
+    # 1a-2 / 1a-3. TC-11 privacy 點擊 + E2E 完整流程（都要在 traffic.jsonl 歸檔前做）。
+    # 順序關鍵：mediation 的 privacy 連結開「外部 Chrome」，round-trip 回來後廣告 view
+    # 不再 render → 之後的 ⑤ 廣告點擊會找不到版位。故 mediation 先跑 E2E 點擊（趁廣告
+    # 還新鮮），privacy 擺後面（次要，失敗不影響主流程）。standalone 的 privacy 開內建
+    # 瀏覽器、BACK 回得到仍在 render 的廣告，維持原順序（privacy 先、E2E 後）。
+    def _run_privacy():
+        if DO_PRIVACY_CLICK:
+            try:
+                do_privacy_click(driver, folder)
+            except Exception as exc:
+                print(f"  [warn] privacy click 失敗（不影響其他證據）：{exc}")
 
-    # 1a-3. E2E 完整流程逐步截圖 + 點擊手勢（要在 traffic.jsonl 歸檔前做）
-    if DO_E2E_FLOW:
-        try:
-            do_e2e_flow(driver, folder)
-        except Exception as exc:
-            print(f"  [warn] E2E flow 失敗（不影響其他證據）：{exc}")
+    def _run_e2e():
+        if DO_E2E_FLOW:
+            try:
+                do_e2e_flow(driver, folder)
+            except Exception as exc:
+                print(f"  [warn] E2E flow 失敗（不影響其他證據）：{exc}")
+
+    if TEST_MODE in ("admob-mediation", "applovin-mediation"):
+        _run_e2e()
+        _run_privacy()
+    else:
+        _run_privacy()
+        _run_e2e()
 
     # 1b. state-proof screenshot（叫出看得見該狀態的系統畫面，肉眼證據）
     proof_captions = capture_state_proof(folder)
@@ -1212,7 +1224,8 @@ def save_evidence(driver, ts):
             if _decoded is not None:
                 _revealed = sum(1 for r in _cmp_rows if r["revealed"])
                 print(f"  ext_enc     → ext_enc_raw.txt / ext_enc_decoded.json / "
-                      f"ext_enc_compare.txt（暗碼揭露 {_revealed}/{len(_cmp_rows)} 訊號欄）")
+                      f"ext_enc_all_fields.json / ext_enc_compare.txt"
+                      f"（暗碼揭露 {_revealed}/{len(_cmp_rows)} 個重點欄）")
         except Exception as exc:
             print(f"  [warn] ext_enc 解碼失敗（不影響其他證據）：{exc}")
     if os.path.exists(FIRST_BID_FILE):

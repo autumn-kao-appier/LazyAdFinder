@@ -28,6 +28,7 @@ Env vars (optional):
     TEST_CID        測試用 CID（未設定時互動詢問）
     TRIGGER_TEXT    UI element text to tap to fire bid (leave unset if app auto-loads)
     DO_PRIVACY_CLICK  1 = capture 後自動點 privacy icon（TC-11；走 adpolicy，免點擊費用）
+    DO_E2E_FLOW     1 = 點擊真實廣告並驗 landing（baseline 預設開啟）
 
 Three terminals:
     T1: mitmdump -s ~/LazyAdFinder/detector.py --listen-port 8081
@@ -202,7 +203,7 @@ CAPTURE_LABEL = os.environ.get("CAPTURE_LABEL", "").strip()
 DO_FGBG      = os.environ.get("DO_FGBG", "0") == "1"
 DWELL_SEC    = float(os.environ.get("DWELL_SEC", "0"))  # 觸發廣告前先前景停留秒數
 AD_RETRY_DELAY = float(os.environ.get("AD_RETRY_DELAY", "2"))
-MAX_AD_ATTEMPTS = int(os.environ.get("MAX_AD_ATTEMPTS", "150"))  # 0 = retry without limit
+MAX_AD_ATTEMPTS = int(os.environ.get("MAX_AD_ATTEMPTS", "0"))  # 0 = retry without limit
 # SAVE_ON_BID=1：偵測到 bid request 即入庫，不要求 200/CID 命中。
 # 用於只驗 request payload 的 TC（如 AND-12 emulator / AND-10 非 root），
 # 這類環境（模擬器新 GAID、opt-out）REEN campaign 本來就不出價
@@ -561,8 +562,18 @@ def collect_environment():
     ipv6_match = re.search(r"inet6\s+([0-9a-f:]+)/\d+", ipv6_addrs, re.I)
     vpn_active = bool(re.search(r"TRANSPORT_VPN|type:\s*VPN", connectivity, re.I) or
                       re.search(r"\b(tun\d+|ppp\d+|wg\d+|tailscale\d*)\b", links, re.I))
+    # 定位權限 ground truth：抓 bid 當下 app 實際的 runtime 權限，供報告 gate AND-45/46
+    # （geo 是唯一先前沒存 ground-truth 的狀態）。fine 或 coarse 任一 granted 即視為允許。
+    fine_m = re.search(r"ACCESS_FINE_LOCATION:\s*granted=(true|false)", pkg)
+    coarse_m = re.search(r"ACCESS_COARSE_LOCATION:\s*granted=(true|false)", pkg)
+    loc_granted = ((fine_m and fine_m.group(1) == "true")
+                   or (coarse_m and coarse_m.group(1) == "true"))
     return {
         "package": APP_PACKAGE,
+        "location_permission": "granted" if loc_granted else "denied",
+        "location_fine": fine_m.group(1) if fine_m else "—",
+        "location_coarse": coarse_m.group(1) if coarse_m else "—",
+        "location_source": "dumpsys package runtime permissions",
         "version_name": match(r"versionName=([^\s]+)"),
         "version_code": match(r"versionCode=(\d+)"),
         "first_install_time": match(r"firstInstallTime=([^\n]+)"),
@@ -1282,8 +1293,8 @@ def save_evidence(driver, ts):
         if TC_ID != "BASELINE":
             tc_filter = set(TC_ID.split(","))
         else:
-            # BASELINE 只記 AUTO 範圍的 TC：狀態類 TC 屬於 M1/M2/M3 rounds，
-            # baseline 全寫會在 round 彙總「取最新 capture」時蓋掉手動 rounds 的結果
+            # BASELINE 只記標準狀態範圍：互斥狀態 TC 由同 round 內其他自動
+            # state captures 提供，避免彙總「取最新 capture」時蓋掉正確結果。
             from build_artifact import AUTO_TCS
             tc_filter = set(AUTO_TCS)
         results = run_inspection(bid, tc_filter)
@@ -1382,6 +1393,11 @@ def main():
     print("[→] launching via Appium ...")
     driver = webdriver.Remote(APPIUM_URL, options=options)
     time.sleep(2.0)
+
+    # Wizard 的 state proof 會把 Settings / Tailscale 等 app 留在前景；即使
+    # Appium session 已建立，也要顯式拉回受測 app，避免在外部 app 找 tab。
+    driver.activate_app(APP_PACKAGE)
+    time.sleep(1.0)
 
     # TEST_MODE 不只寫入報告：先切到對應 SDK integration tab，之後所有同名
     # trigger 也都以畫面座標過濾，避免點到 ViewPager 預載的相鄰分頁。
@@ -1511,9 +1527,7 @@ def main():
         print("[→] saving evidence ...")
         folder = save_evidence(driver, ts)
         print(f"\n[DONE] {folder}/")
-        if status == "204":
-            return 3
-        return 0
+        result_code = 3 if status == "204" else 0
 
     finally:
         stop_logcat()
@@ -1523,6 +1537,12 @@ def main():
             # session 逾時/已死時 quit 會丟例外；證據已存完，不能讓收尾失敗把
             # 本 round 標成未完成
             print(f"[warn] driver.quit() 失敗（不影響已存證據）：{exc}")
+
+    # 發布可能耗時超過 Appium newCommandTimeout，必須在 quit 後才做；否則
+    # session 會在 git push 期間過期，污染 Wizard 下一個 capture。
+    from publish_pages import auto_publish
+    auto_publish()
+    return result_code
 
 
 if __name__ == "__main__":

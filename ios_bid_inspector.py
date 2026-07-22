@@ -188,10 +188,11 @@ IOS_VALIDATORS = [
      "disp": "反轉", "note": "iOS 無法列舉已安裝 app（隱私限制）→ 應缺席或空陣列（與 AOS AND-62 相反）"},
     {"tc": "IOS-63", "field": "device.ext.iaphistory", "check": "array", "cal": True,
      "disp": "NA", "note": "iOS SDK 未送 iaphistory（實測 ext 無此欄，RD gap）"},
-    {"tc": "IOS-64", "field": "device.carrier", "check": "absent_or_empty", "disp": "直接搬", "note": "no SIM"},
-    {"tc": "IOS-64", "field": "device.mccmnc", "check": "absent_or_empty", "disp": "直接搬", "note": "no SIM"},
-    {"tc": "IOS-72", "field": "device.operator", "check": "absent_or_empty", "disp": "直接搬", "note": "no SIM"},
-    {"tc": "IOS-72", "field": "device.operator_name", "check": "absent_or_empty", "disp": "直接搬", "note": "no SIM"},
+    # 無 SIM → carrier/operator 無法真正測，標待校準(cal)＝block 等價；有 SIM 機再開來測。
+    {"tc": "IOS-64", "field": "device.carrier", "check": "absent_or_empty", "disp": "直接搬", "cal": True, "note": "no SIM；有 SIM 機再測"},
+    {"tc": "IOS-64", "field": "device.mccmnc", "check": "absent_or_empty", "disp": "直接搬", "cal": True, "note": "no SIM；有 SIM 機再測"},
+    {"tc": "IOS-72", "field": "device.operator", "check": "absent_or_empty", "disp": "直接搬", "cal": True, "note": "no SIM；有 SIM 機再測"},
+    {"tc": "IOS-72", "field": "device.operator_name", "check": "absent_or_empty", "disp": "直接搬", "cal": True, "note": "no SIM；有 SIM 機再測"},
     # ── M. SKAdNetwork（反轉：iOS 本來就該送）
     {"tc": "IOS-81", "field": "skadn.versions", "root": "raw", "check": "array_nonempty",
      "disp": "反轉", "note": "iOS 有送 SKAdNetwork versions（在 req_enc.skadn，與 AOS AND-81「不該有」相反）"},
@@ -353,21 +354,30 @@ def format_round_report(rows, round_name=""):
         f"{'TC':<9}  {'Field':<32}  {'Actual':<22}  {'Result':<7}  Capture",
         f"{'─'*9}  {'─'*32}  {'─'*22}  {'─'*7}  {'─'*24}",
     ]
-    passed = failed = 0
+    # cal=True 的欄位＝尚待實機校準，判定等同平台的「待校準/CAL」（BLOCKED-equiv），
+    # 不算 FAIL——與 build_artifact_ios._card_from_result 一致，避免 round_report 與平台數字打架。
+    cal_fields = {(v["tc"], v["field"]) for v in IOS_VALIDATORS if v.get("cal")}
+    passed = failed = caln = 0
     for r in rows:
-        status = "PASS ✓" if r["passed"] else "FAIL ✗"
+        if r["passed"]:
+            status = "PASS ✓"
+            passed += 1
+        elif (r["tc"], r["field"]) in cal_fields:
+            status = "CAL ⚑"          # 待校準：不計入 failed（與平台 CAL 一致）
+            caln += 1
+        else:
+            status = "FAIL ✗"
+            failed += 1
         lines.append(
             f"{r['tc']:<9}  {r['field']:<32}  {_trunc(r['actual'], 20):<22}  {status:<7}  {r['capture']}")
         if not r["passed"] and r.get("note"):
             lines.append(f"{'':9}  ↳ {r['note']}")
-        passed += r["passed"]
-        failed += not r["passed"]
     covered = {(r["tc"], r["field"]) for r in rows}
     missing = sorted({v["tc"] for v in IOS_VALIDATORS if (v["tc"], v["field"]) not in covered})
     cal = sorted({v["tc"] for v in IOS_VALIDATORS if v.get("cal")})
     lines += [
         "─" * W,
-        f"  {passed} passed  /  {failed} failed  /  {len(rows)} checked  /  {len(missing)} 未擷取",
+        f"  {passed} passed  /  {failed} failed  /  {caln} 待校準  /  {len(rows)} checked  /  {len(missing)} 未擷取",
         f"  待校準 TC（{len(cal)}）: {', '.join(cal)}",
     ]
     if missing:

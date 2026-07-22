@@ -310,7 +310,9 @@ def _v_bid_response(caps, ids, test_type):
                     "apx pinning → 無 proxy body，以 SDK 載入結果為證", [lc_name])
         nobid_name, _, _ = _first_logcat(caps, r"onAdNoBid\(\)")
         if nobid_name:
-            return "observe", f"logcat onAdNoBid()：本次無廣告可服務（{nobid_name}）", [nobid_name]
+            return ("pending",
+                    f"logcat onAdNoBid()：本次無廣告可服務（no-fill），無 200 response body 可驗"
+                    f"（{nobid_name}）", [nobid_name])
         return ("pending",
                 "round 內沒有保存到 200 response body（capture 走 logcat 偵測；"
                 "需 mitmdump 在線的 capture）", [])
@@ -446,9 +448,9 @@ def _v_impression(caps, ids, test_type):
                     f"屬同 session 稍早 impression，最終 bid 的 show_cb 未及寫入 log（{name}）",
                     [name])
         if shows:
-            return ("observe",
-                    f"show_cb {list(shows.values())[0]}，未見同 bidobjid 的 winshowimg 200（{name}）",
-                    [name])
+            return ("fail",
+                    f"show_cb {list(shows.values())[0]}，但未見同 bidobjid 的 winshowimg 200"
+                    f"（impression chain 未完成）（{name}）", [name])
     # proxy 沒攔到 show_cb（pinning）→ logcat：SDK 印 "Requesting impression tracker: ...show_cb?bidobjid=..."
     name, _, m = _first_logcat(caps,
                               r"Requesting impression tracker:\s*\S*show_cb\?[^\s]*bidobjid=([^&\s]+)")
@@ -459,8 +461,9 @@ def _v_impression(caps, ids, test_type):
     name, folder = _first_with(
         caps, lambda f: re.search(r"show_cb.*(rc=200|200)", _text_file(f, "logcat_appier.txt")))
     if name:
-        return ("observe",
-                f"logcat 有 show_cb rc=200，但無 proxy 流量可驗 winshowimg chain（{name}）", [name])
+        return ("pending",
+                f"logcat 有 show_cb rc=200，但無 proxy 流量可驗 winshowimg chain（無法確認曝光完成）（{name}）",
+                [name])
     return "pending", "無 show_cb 證據；" + NO_TRAFFIC_NOTE, []
 
 
@@ -498,14 +501,16 @@ def _v_click_chain(caps, ids, test_type):
         cid_ok = (ids or {}).get("cid", "") in url if ids else True
         if status == 302 and cid_ok:
             return "pass", f"xclk 302，cid 對應（{name}）", [name]
-        return "observe", f"xclk {status}（cid {'對應' if cid_ok else '不符'}）（{name}）", [name]
-    # proxy 沒攔到 xclk（apx pinning）→ e2e_flow.json / logcat 佐證點擊已執行
+        return ("fail",
+                f"xclk 點擊鏈異常：status={status}、cid {'對應' if cid_ok else '不符'}"
+                f"（預期 302＋cid 對應）（{name}）", [name])
+    # proxy 沒攔到 xclk（apx pinning／外部瀏覽器）→ 點擊有執行但點擊鏈無法驗證 → pending，不當 pass
     cname, _, landing = _click_evidence(caps)
     if cname:
         extra = f"，落地 URL：{landing}" if landing else ""
-        return ("pass",
-                f"已自動點擊廣告、開啟落地頁（{cname}）{extra}；apx pinning 無 xclk proxy 流量，"
-                "以 e2e_flow.json + 點擊/落地截圖為證", [cname])
+        return ("pending",
+                f"點擊已執行、落地頁已開（{cname}）{extra}，但 proxy 未見 xclk chain"
+                "（pinning／外部瀏覽器），無法驗證點擊鏈", [cname])
     return "pending", CLICK_NOTRUN_NOTE, []
 
 
@@ -526,10 +531,12 @@ def _v_click_chain_reen(caps, ids, test_type):
     if cname:
         if landing and "${" in landing:
             return "fail", f"落地 URL 有未展開 macro：{landing[:120]}（{cname}）", [cname]
-        extra = f"，落地 URL：{landing}" if landing else "（落地截圖已存）"
-        return ("pass",
-                f"REEN 點擊已執行、落地頁開啟{extra}（{cname}）；macro 無殘留，以截圖 + logcat 為證",
-                [cname])
+        if landing:
+            return ("pass",
+                    f"REEN 點擊已執行、落地 URL 無殘留 macro：{landing[:120]}（{cname}）", [cname])
+        # 只有點擊/截圖、拿不到落地 URL → 無法驗 macro 展開 → pending，不當 pass
+        return ("pending",
+                f"REEN 點擊已執行、落地截圖已存，但無落地 URL 可檢查 macro 展開（{cname}）", [cname])
     return "pending", CLICK_NOTRUN_NOTE, []
 
 
@@ -591,6 +598,10 @@ def _v_ext_enc_decode(caps, ids, test_type):
     rows, _ = build_comparison(body, decoded)
     revealed = sum(1 for r in rows if r["revealed"])
     top = list(decoded.keys())
+    if revealed == 0:
+        return ("fail",
+                f"ext_enc 解碼成功但 0/{len(rows)} 訊號欄被揭露（明文皆已存在或暗碼包內無實值）；"
+                f"TC-17 要求敏感訊號實際落在暗碼包內（{name}）", [name])
     return ("pass",
             f"ext_enc 解碼成功（ae1 XOR）：top-level {top}；"
             f"暗碼揭露 {revealed}/{len(rows)} 訊號欄（明文缺/null → 暗碼包內有實值）；"
@@ -635,11 +646,13 @@ VALIDATORS = {
 
 
 # 為何某 TC 在特定模式不適用（跳過原因，寫進報告讓人一眼懂）
+# 措辭與當前 test_mode 無關（standalone 或 applovin-mediation 都可能觸發 na_mode），
+# 只說明「此步驟為 AdMob mediation 專屬」，別寫死「standalone」。
 MODE_NA_REASON = {
-    "TC-02": "驗 AdMob mediation 的 pubsetting 設定拉取；standalone（純 Appier SDK）沒有 AdMob 中介層，此步驟不存在",
-    "TC-03": "驗 AdMob mediation 對 mads/gma 發廣告請求；standalone 直接打 Appier，不經 AdMob，此步驟不存在",
-    "TC-08": "驗 AdMob mediation 的 fill result 回報；standalone 無 mediation，不會有 fill 回報",
-    "TC-16": "驗 Appier no-fill 後 fallback 到 AdMob 下一 network；standalone 沒有 mediation fallback 鏈",
+    "TC-02": "AdMob mediation 專屬：驗 pubsetting 設定拉取；非 AdMob 中介層的模式不經此步驟",
+    "TC-03": "AdMob mediation 專屬：對 mads/gma 發廣告請求；非 AdMob 中介的模式直接打 Appier，不經此步驟",
+    "TC-08": "AdMob mediation 專屬：fill result 回報；非 AdMob 中介的模式不會有 fill 回報",
+    "TC-16": "AdMob mediation 專屬：Appier no-fill 後 fallback 到下一 network；非 AdMob 中介的模式無 fallback 鏈",
 }
 
 

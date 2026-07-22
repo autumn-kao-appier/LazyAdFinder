@@ -70,14 +70,20 @@ MODE_PATTERNS = [
 
 def classify_round(name):
     """從 round 資料夾名推出 (platform, mode, type)。platform 無標記時預設 aos，
-    mode 無 mediation 標記時預設 standalone。回傳 (platform, mode, type) 或 None。"""
+    mode 無 mediation 標記時預設 standalone。回傳 (platform, mode, type) 或 None。
+
+    只解析 `_CID_` 之前的「結構化前綴」（run_ssp 命名：MODE_TYPE_CID_<cid>_<round>_<ts>）；
+    絕不掃到使用者輸入的 CID / TEST_ROUND，否則 CID 含 admob/ipad、round 標籤含 ADMOB
+    之類會被誤判 mode/platform/type（實測會把 standalone 判成 mediation、aos 判成 ios）。
+    舊 round 無 `_CID_` 時退回用整個名稱（向後相容）。"""
     if name.startswith("SCRAPPED"):
         return None
-    ttype = next((t for t, rx in TYPE_PATTERNS if rx.search(name)), None)
+    prefix = name.split("_CID_", 1)[0]   # 只看 MODE_TYPE 這段，不看 CID/round 尾巴
+    ttype = next((t for t, rx in TYPE_PATTERNS if rx.search(prefix)), None)
     if not ttype:
         return None
-    plat = next((p for p, rx in PLATFORM_PATTERNS if rx.search(name)), "aos")
-    mode = next((m for m, rx in MODE_PATTERNS if rx.search(name)), "standalone")
+    plat = next((p for p, rx in PLATFORM_PATTERNS if rx.search(prefix)), "aos")
+    mode = next((m for m, rx in MODE_PATTERNS if rx.search(prefix)), "standalone")
     return plat, mode, ttype
 
 
@@ -90,13 +96,22 @@ def _has_results(round_dir):
 
 
 def _round_score(round_dir):
-    """挑最佳 round 的排序 key：有 e2e > capture 數多 > 較新。"""
-    has_e2e = os.path.exists(os.path.join(round_dir, "e2e_results.json"))
+    """挑展示 round：完整 E2E 優先，再取最新，capture 數只作最後 tie-break。"""
+    e2e_path = os.path.join(round_dir, "e2e_results.json")
+    has_e2e = os.path.exists(e2e_path)
+    e2e_complete = False
+    if has_e2e:
+        try:
+            with open(e2e_path) as f:
+                rows = json.load(f).get("results", [])
+            e2e_complete = build_artifact.compute_round_progress(rows)["complete"]
+        except (OSError, ValueError, TypeError):
+            pass
     n_caps = sum(
         1 for e in os.scandir(round_dir)
         if e.is_dir() and os.path.exists(os.path.join(e.path, "results.json")))
     mtime = os.path.getmtime(round_dir)
-    return (has_e2e, n_caps, mtime)
+    return (e2e_complete, has_e2e, mtime, n_caps)
 
 
 def discover(evidence_dirs):
@@ -338,15 +353,17 @@ def render_card(plat_id, plat_lbl, mode_id, mode_lbl, type_id, type_lbl, type_de
     slot = f"{plat_id}:{mode_id}:{type_id}"
     title = f"{plat_lbl} · {mode_lbl} · {type_lbl}"
     if not meta:
+        # 沒有對應 round＝本輪根本沒跑這個組合 → 標「未執行 / No run」，
+        # 不可與「有跑但某些 TC 本輪不適用（Blocked）」混淆（不顯示 0/0/84 blocked）。
         return (
             f'<div class="card empty" data-plat="{plat_id}" data-slot="{slot}">'
             f'<div class="card-top"><div>'
             f'<div class="card-cat">{html.escape(type_lbl)}</div>'
             f'<div class="card-desc">{html.escape(type_desc)}</div></div>'
-            f'<span class="card-state none">尚無資料</span></div>'
-            f'<div class="card-empty-note">此組合尚未有對應 round 的 evidence；'
+            f'<span class="card-state none">未執行 / No run</span></div>'
+            f'<div class="card-empty-note">本輪未執行此組合（無對應 round evidence）；'
             f'跑完 {html.escape(title)} 後會自動出現在這裡。</div>'
-            f'<div class="card-open">待補</div></div>'
+            f'<div class="card-open">未執行 / No run</div></div>'
         )
     sig_total = meta["signal_total"]
     sc = meta["signal_counts"]

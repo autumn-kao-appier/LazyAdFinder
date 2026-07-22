@@ -297,11 +297,11 @@ BLOCKED = {
     "AND-43": "感應器固定值／操作方式未定，標準要求先跳過",
     "AND-51": "impression_history 尚未實作，標準列為 Block",
     "AND-61": "Echo Server 僅回 IP，無法量測 latency；待 RD 提供其他方式",
-    "AND-64": "無 SIM 機；SIM 模擬能力未確認（R5）",
-    # session 三情境：缺 capture 表示該情境 round 尚未跑
-    "AND-47-1": "需跑 SESSION_CASE=1 round（run_ssp；bid A→關廣告頁→bid B 對照）",
-    "AND-47-2": "需跑 SESSION_CASE=2 round（run_ssp；bid A→force-stop 重開→bid B 對照）",
-    "AND-47-3": "需跑 SESSION_CASE=3 round（run_ssp；bid A→背景切回→bid B 對照）",
+    # 無 SIM → carrier/operator 無法真正測（沒插卡就沒業者可比對）；有 SIM 機再開來測。
+    "AND-64": "無 SIM 機；carrier/mccmnc 需有 SIM 才能測，有 SIM 機再開",
+    "AND-72": "無 SIM 機；operator/operator_name 需有 SIM 才能測，有 SIM 機再開",
+    # 註：AND-47-1/2/3（session 三情境）不列此——那不是「清楚限制」，是「本輪沒跑該情境」。
+    # 有 SC capture 時照值判 PASS/FAIL；沒跑到則走一般「本輪未執行」block（classify 末行）。
 }
 
 # 規格自身互相矛盾／expected 尚未定義；即使有 Capture 也不能判產品 Fail。
@@ -319,25 +319,9 @@ TYPE_NA_REEN = {
     "AND-76": "lat=1（opt-out）與 REEN 互斥（opt-out → 204 no-bid，抓不到指定 CID）；此 TC 走 AIBID 輪",
 }
 
-# E2E cases require evidence beyond a bid request. Never infer PASS from the
-# signal payload alone; this table states the evidence gate for the current
-# standalone round.
-E2E_CASES = [
-    ("TC-01", "BLOCKED", "自動化證據缺口：本 Round 未保存 init request/response；需讓代理自動保存 HTTP 200 response 並核對 bundle/sdk_version"),
-    ("TC-02", "BLOCKED", "AdMob pubsetting；本輪為 Standalone"),
-    ("TC-03", "BLOCKED", "AdMob mads/gma mediation；本輪為 Standalone"),
-    ("TC-04", "BLOCKED", "自動化證據缺口：有 /v2/sdk/aos/ad request，但未保存 HTTP 200 response body，無法核對 adUnits[0].ad"),
-    ("TC-05", "BLOCKED", "自動化證據缺口：未保存 icon/main/privacy asset 的 HTTP 200/304 network trace"),
-    ("TC-06", "BLOCKED", "自動化證據缺口：已有指定 CID 畫面，但缺 response native content，無法完成畫面逐項比對"),
-    ("TC-07", "BLOCKED", "自動化證據缺口：有 show_cb request/rc=200，但未保存 show_cb→winshowimg redirect chain 與 identity"),
-    ("TC-08", "BLOCKED", "AdMob mediation fill_urls；本輪為 Standalone"),
-    ("TC-09", "BLOCKED", "需手動／成本核准：執行一次受控點擊並保存完整 xclk redirect chain；未獲核准前自動流程不得點擊"),
-    ("TC-10", "BLOCKED", "需手動：確認 REEN deeplink 直開 target app product page，並保存落地畫面／錄影"),
-    ("TC-11", "BLOCKED", "需手動：排除 SSL proxy 後點擊 privacy icon，保存 privacyInformationLink trace 與落地畫面"),
-    ("TC-14", "BLOCKED", "需手動／成本核准：保存 click、OneLink macro 展開、deeplink redirect chain 與落地畫面"),
-    ("TC-15", "BLOCKED", "本 workspace 無 Spark raw_action / MMP 證據；需由有權限者匯出 attribution 結果並以 bidobjid/CID/CRID 對照"),
-    ("TC-16", "BLOCKED", "AdMob fallback/nofill_urls；本輪為 Standalone"),
-]
+# E2E 適用性與判定的權威在 e2e_catalog.py（每條 TC 帶 modes/types，evaluate() 依
+# 所選 TEST_MODE/TEST_TYPE 自動判 na_mode / na_type → BLOCKED）。這裡不再放靜態
+# 清單，避免像舊版 E2E_CASES 那樣硬編「本輪為 Standalone」與 e2e_catalog 牴觸。
 
 # 可驗度分級
 ABSENT_CHECKS = {"absent", "absent_or_empty", "falsy", "value_or_absent"}
@@ -460,9 +444,20 @@ def load_captures(round_dir):
                 environment.update(json.load(open(environment_path)))
             except Exception:
                 pass
+        # 時間敏感 check（AND-48/49 recency）要用「capture 當下」的時間，不是檔案 mtime
+        # （搬檔／複製 evidence 會把 mtime 重設成現在 → recency delta 失真）。
+        # 優先用 results.json 記的 captured_at；解析失敗才退回 bid 檔 mtime。
+        captured_at_ms = None
+        if ts:
+            try:
+                captured_at_ms = datetime.fromisoformat(ts).timestamp() * 1000
+            except (ValueError, TypeError):
+                captured_at_ms = None
+        if captured_at_ms is None and os.path.exists(bid_path):
+            captured_at_ms = os.path.getmtime(bid_path) * 1000
         caps[name] = {"bid": bid, "first_bid": first_bid,
                       "shot_path": shot_path, "ts": ts,
-                      "captured_at_ms": os.path.getmtime(bid_path) * 1000 if os.path.exists(bid_path) else None,
+                      "captured_at_ms": captured_at_ms,
                       "folder": name, "stored": stored,
                       "proof_paths": proof_paths, "proof_caps": proof_caps,
                       "action": action, "bid_ids": bid_ids, "session_case": session_case,
@@ -538,6 +533,11 @@ def capture_state_eligible(tc, cap):
                             and str(env.get("media_volume", "")).split("/")[0]
                             == str(env.get("media_volume", "")).split("/")[1]
                             and "volume" in proofs),
+        # 定位權限 ground truth（run_ssp collect_environment 存的 location_permission）：
+        # AND-45 需實際「允許」、AND-46 需實際「拒絕」，抓值當下就對證據，避免 bid 帶 geo
+        # 卻被當「已拒絕」誤判。
+        "AND-45": lambda: str(env.get("location_permission", "")).lower() == "granted",
+        "AND-46": lambda: str(env.get("location_permission", "")).lower() == "denied",
     }
     check = checks.get(tc)
     if check is None:
@@ -560,8 +560,16 @@ def capture_candidates(tc, caps):
         declared_tcs = caps[name].get("executed_tcs", set())
         return tc in declared_tcs or ("BASELINE" in declared_tcs and tc in AUTO_TCS)
 
+    # 逗號多選會存成 `AND-04+AND-05_<ts>`（run_ssp.py：TC_ID.replace(",", "+")），
+    # startswith("AND-04_") 對不上（下個字是 `+`）；改用 folder results.json 宣告的
+    # executed_tcs 直接認（該資料夾確實跑了這條 tc），不再只靠檔名前綴。
+    def name_matches(n):
+        return (n.startswith(tc + "_")
+                or n.startswith(tc.replace("-", "") + "_")
+                or tc in caps[n].get("executed_tcs", set()))
+
     matches = sorted(n for n in caps
-                     if (n.startswith(tc + "_") or n.startswith(tc.replace("-", "") + "_"))
+                     if name_matches(n)
                      and declared(n)
                      and capture_state_eligible(tc, caps[n]))
     if matches:
@@ -569,8 +577,12 @@ def capture_candidates(tc, caps):
     label = expected_capture_label(tc)
     if label is None:
         return []
+    # run_ssp 的 BASELINE capture 資料夾實際命名為 `baseline_<ts>`（run_ssp.py:1151），
+    # 不是 `AUTO_<ts>`；只認 label 前綴會讓 baseline round 的 AUTO_TCS 一條都對不上、
+    # 全被誤判 BLOCKED。declared() 已把「BASELINE capture 涵蓋 AUTO_TCS」的意圖編碼進去，
+    # 這裡放寬前綴：baseline_ 也算數（非 AUTO_TCS 的 tc declared() 仍為 False，不會誤收）。
     return sorted(n for n in caps
-                  if n.startswith(label + "_")
+                  if (n.startswith(label + "_") or n.startswith("baseline_"))
                   and declared(n)
                   and capture_state_eligible(tc, caps[n]))
 
@@ -584,16 +596,17 @@ def classify(tc, check, passed, actual, groups, exp, targeted, has_capture,
     # 只能描述「尚未取得可判讀 Capture」，不得覆蓋 FAIL 或 PASS。
     if tc in SPEC_BLOCKED:
         return "BLOCKED", None
+    # block 只給「非常清楚的限制」：本輪 RD 沒做（SDK 未實作，值恆 null/[]）或硬體不可得
+    # （沒 SIM／需 AVD／需非 root）。放在 has_capture 之前——這類即使抓到（空）值也不是
+    # 產品 FAIL，是 RD/硬體 gap，恆 block。
+    if tc in BLOCKED or tc in RD_GAP:
+        return "BLOCKED", None
     if has_capture:
-        if passed:
-            return "PASS", None
-        if failed_attempts >= 2:
-            return "FAIL", RD_GAP.get(tc)
-        return "BLOCKED", None
-    if tc in BLOCKED:
-        return "BLOCKED", None
+        # 有做：值對＝PASS，值錯＝FAIL（失敗一次就算，不看次數）。
+        return ("PASS", None) if passed else ("FAIL", None)
     if tc in MANUAL:
         return "MANUAL", None
+    # 這輪沒做（無 eligible capture／未佈狀態）→ block
     return "BLOCKED", None
 
 
@@ -879,10 +892,12 @@ def build(round_dir, out_path, e2e_round=None):
                     f"Capture 讀到 {field} = {actual_disp}，但 TC expected 與 Golden/SDK 定義互相衝突；"
                     "在規格定案前不可判產品 Pass/Fail，因此判定 Blocked。"
                 )
-            elif res is not None:
+            elif tc in BLOCKED or tc in RD_GAP:
+                reason = BLOCKED.get(tc) or RD_GAP.get(tc)
+                got = (f"（本輪 Capture 讀到 {field} = {actual_disp}，屬 RD/硬體 gap，不判產品 Fail）"
+                       if res is not None else "")
                 evidence_explanation = (
-                    f"目前只有 {failed_attempts} 次 mismatch；完成態規則要求自動 Retry 後仍 mismatch "
-                    "才能定案 Fail。本 Round 缺少後續 Retry Capture，因此判定 Blocked。"
+                    f"清楚的限制（本輪 RD 沒做或硬體不可得）：{reason}{got}。因此判定 Blocked。"
                 )
             elif type_na_reason:
                 evidence_explanation = (
@@ -891,8 +906,8 @@ def build(round_dir, out_path, e2e_round=None):
                 )
             else:
                 evidence_explanation = (
-                    "本 Round 沒有符合測試前提的 Capture；"
-                    "無 actual 可比對，因此判定 Blocked。"
+                    "本輪未執行此 TC：沒佈到它要求的狀態／沒跑該情境，"
+                    "因此沒有可比對的 Capture（非缺證據，是這輪沒做）→ Blocked。"
                 )
         cap = caps.get(cap_name, {})
         proof_group = st[0] if st else None
@@ -925,10 +940,8 @@ def build(round_dir, out_path, e2e_round=None):
             "actual": actual_disp,
             "evidence_explanation": evidence_explanation,
             "rd_note": rd_note,
-            "blocked_reason": ((type_na_reason or BLOCKED.get(tc) or
-                                ("首次 mismatch 後缺少自動 Retry Capture"
-                                 if res is not None else
-                                 "本 round 缺少符合測試前提的 capture（狀態未建立或未執行）"))
+            "blocked_reason": ((type_na_reason or BLOCKED.get(tc) or RD_GAP.get(tc) or
+                                "本輪未執行：沒佈該狀態／沒跑該情境（非缺證據，這輪沒做）")
                                if status == "BLOCKED" else None),
             "set": st[1] if st else None,
             "shows": st[2] if st else None,
@@ -955,7 +968,9 @@ def build(round_dir, out_path, e2e_round=None):
 
     # Header counts are unique TCs, not validator rows. Multi-field TCs such as
     # geo lat/lon remain separate assertions inside one TC status.
-    precedence = {"PASS": 0, "PENDING": 1, "MANUAL": 2, "FAIL": 3, "BLOCKED": 4}
+    # FAIL 必須蓋過 BLOCKED：同一 TC 若一個欄位 FAIL、一個 BLOCKED，整條算 FAIL
+    # （不准把真 FAIL 藏成 block）。
+    precedence = {"PASS": 0, "PENDING": 1, "MANUAL": 2, "BLOCKED": 3, "FAIL": 4}
     tc_status = {}
     for card in cards:
         old = tc_status.get(card["tc"])
@@ -970,7 +985,9 @@ def build(round_dir, out_path, e2e_round=None):
     # 跨 capture 一致性：同一顆裝置每次 capture 的 ia / ifv 應恆定
     consistency = []
     latest_caps = []
-    for label in ("AUTO", "M1", "M2", "M3"):
+    # 含 baseline_：run_ssp 單跑 baseline 的資料夾叫 baseline_<ts>，漏了它會讓
+    # baseline-only round 的一致性面板顯示「0 種值 / 0 次」✗（其實有值）。
+    for label in ("AUTO", "M1", "M2", "M3", "baseline"):
         names = sorted(name for name in caps if name.startswith(label + "_"))
         if names:
             latest_caps.append(caps[names[-1]])
@@ -993,7 +1010,8 @@ def build(round_dir, out_path, e2e_round=None):
     for name, c in caps.items():
         for group, proof_path in c.get("proof_paths", {}).items():
             shots_js[name + "::proof::" + group] = encode_shot(proof_path)
-    latest_auto = sorted(name for name in caps if name.startswith("AUTO_"))
+    latest_auto = sorted(name for name in caps
+                         if name.startswith("AUTO_") or name.startswith("baseline_"))
     e2e_ad_shot = None
     if latest_auto:
         auto_cap = caps[latest_auto[-1]]
@@ -1045,9 +1063,19 @@ def build(round_dir, out_path, e2e_round=None):
             except Exception:
                 e2e_data = None
     if e2e_data is None:
-        e2e_data = [{"tc": tc, "name": "", "priority": "", "status": "pending",
-                     "note": reason, "evidence": []}
-                    for tc, _status, reason in E2E_CASES]
+        # 最後 fallback：連 e2e_catalog.evaluate 都拿不到（本輪未帶 TEST_MODE/TEST_TYPE
+        # 或評估丟例外）→ 用 catalog TC 清單標 pending，不臆測 mode（不再硬編 standalone）。
+        try:
+            from e2e_catalog import E2E_TCS
+            e2e_data = [{"tc": t["tc"], "name": t["name"], "priority": t["priority"],
+                         "check_kind": t.get("check_kind", ""), "expected": t.get("expected", ""),
+                         "endpoint": t.get("endpoint", ""), "status": "pending",
+                         "note": "尚未評估 E2E（本輪未帶 TEST_MODE/TEST_TYPE 或評估失敗）；"
+                                 "帶齊 mode/type 重跑即依適用矩陣自動判定 na_mode / na_type",
+                         "evidence": [], "step": "", "step_shot": None}
+                        for t in E2E_TCS]
+        except Exception:
+            e2e_data = []
 
     # 逐步截圖：把 e2e_step_*.png（step_shot 相對路徑）編成 data URI 掛到每列，
     # 供 E2E 分頁時間軸顯示；還沒重跑產圖時 step_shot 為 None，時間軸標「待截圖」
@@ -1220,15 +1248,16 @@ def render_html(round_name, generated, counts, total, verified, by_cat, shots_js
     # 後續測試者清單只列「本次最終狀態」仍為 Manual/Blocked 的 TC；
     # metadata 內即使留有環境限制說明，也不得把已判 Pass/Fail 的 TC 再列進來。
     tc_status = {}
-    status_rank = {"PASS": 0, "PENDING": 1, "MANUAL": 2, "FAIL": 3, "BLOCKED": 4}
+    status_rank = {"PASS": 0, "PENDING": 1, "MANUAL": 2, "BLOCKED": 3, "FAIL": 4}
     for items in by_cat.values():
         for card in items:
             old = tc_status.get(card["tc"])
             if old is None or status_rank[card["status"]] > status_rank[old]:
                 tc_status[card["tc"]] = card["status"]
     manual_now = {tc: hint for tc, hint in MANUAL.items() if tc_status.get(tc) == "MANUAL"}
-    # Blocked 面板必須列出「全部」目前 Blocked 的 TC（數字要跟 tile 一致），
-    # 依原因分兩類：硬體受限（BLOCKED 表）/ 缺證據（無 eligible capture、缺 Retry…）
+    # Blocked 面板必須列出「全部」目前 Blocked 的 TC（數字要跟 tile 一致），依原因分兩類：
+    #   RD/硬體限制（BLOCKED∪RD_GAP：RD 未實作或沒 SIM/AVD/非 root）——清楚限制，恆 block；
+    #   本輪未執行（無 eligible capture：未佈狀態／未跑該情境）——這輪根本沒做。
     hw_blocked, ev_blocked, na_blocked = {}, {}, {}
     pending_now = {}
     for items in by_cat.values():
@@ -1240,11 +1269,11 @@ def render_html(round_name, generated, counts, total, verified, by_cat, shots_js
                 if card.get("type_na"):
                     na_blocked[tc] = (card.get("blocked_reason")
                                       or "本輪投放目的不適用")
-                elif tc in BLOCKED:
-                    hw_blocked[tc] = BLOCKED[tc]
+                elif tc in BLOCKED or tc in RD_GAP:
+                    hw_blocked[tc] = BLOCKED.get(tc) or RD_GAP.get(tc)
                 else:
                     ev_blocked[tc] = (card.get("blocked_reason")
-                                      or "本 round 缺少符合測試前提的 capture")
+                                      or "本輪未執行：未佈該狀態／未跑該情境（非缺證據，這輪沒做）")
             if tc_status.get(tc) == "PENDING" and card["status"] == "PENDING" \
                     and tc not in pending_now:
                 pending_now[tc] = card.get("evidence_explanation", "等待可判讀的 capture")
@@ -1253,11 +1282,11 @@ def render_html(round_name, generated, counts, total, verified, by_cat, shots_js
         f'<td>{esc(hint)}</td></tr>'
         for tc, hint in sorted(manual_now.items()))
     blk_rows = "".join(
-        f'<tr><td class="mtc">{esc(tc)}</td><td class="mtag mtag-blk">硬體受限</td>'
+        f'<tr><td class="mtc">{esc(tc)}</td><td class="mtag mtag-blk">RD/硬體限制</td>'
         f'<td>{esc(reason)}</td></tr>'
         for tc, reason in sorted(hw_blocked.items()))
     evb_rows = "".join(
-        f'<tr><td class="mtc">{esc(tc)}</td><td class="mtag mtag-blk">缺證據</td>'
+        f'<tr><td class="mtc">{esc(tc)}</td><td class="mtag mtag-blk">本輪未執行</td>'
         f'<td>{esc(reason)}</td></tr>'
         for tc, reason in sorted(ev_blocked.items()))
     nab_rows = "".join(
@@ -1272,11 +1301,11 @@ def render_html(round_name, generated, counts, total, verified, by_cat, shots_js
         for tc, reason in sorted(pending_now.items()))
     checklist = (
         '<details class="manlist" id="checklist" open><summary>未完成項目與環境限制（Signal）'
-        f'（{len(manual_now)} 需手動 · {len(hw_blocked)} 硬體受限 · {len(ev_blocked)} 缺證據'
+        f'（{len(manual_now)} 需手動 · {len(hw_blocked)} RD/硬體限制 · {len(ev_blocked)} 本輪未執行'
         f' · {len(na_blocked)} 投放目的不適用 · {pending_total} pending）</summary>'
         f'<p class="manlist-lead">Signal Blocked tile = 本表 '
         f'{len(hw_blocked) + len(ev_blocked) + len(na_blocked)} 個 Signal TC'
-        f'（硬體受限＋缺證據＋投放目的不適用）；E2E 未完成項見「E2E」分頁。'
+        f'（RD/硬體限制＋本輪未執行＋投放目的不適用）；E2E 未完成項見「E2E」分頁。'
         f'每列附「為什麼沒完成／缺什麼」：</p>'
         '<div class="mwrap"><table class="mtable"><tbody>'
         + man_rows + blk_rows + evb_rows + nab_rows + pend_rows +
@@ -1597,7 +1626,7 @@ function saveOvr(k, st, n){
   localStorage.setItem(OVR_KEY, JSON.stringify(OVR));
 }
 function recount(){
-  const rank = {pass:0,pending:1,manual:2,fail:3,blocked:4};
+  const rank = {pass:0,pending:1,manual:2,blocked:3,fail:4};
   const byTc = {};
   const cards = document.querySelectorAll('.card');
   cards.forEach(x=>{

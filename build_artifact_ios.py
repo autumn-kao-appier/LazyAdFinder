@@ -221,6 +221,13 @@ def evaluate_round(caps):
     counts = {"pass": 0, "fail": 0, "blocked": 0}
     for c in cards:
         counts[c["status_cls"]] = counts.get(c["status_cls"], 0) + 1
+    # 未 capture 的 validator (tc,field) 也計入 blocked（本輪未執行），讓分母＝完整 IOS
+    # validator scope——與 Android 一致（Android 對無 capture 的 TC 也計 BLOCKED），否則
+    # 兩平台分母不同、iOS 會少報總數。
+    captured_keys = set(merged.keys())
+    counts["blocked"] += sum(
+        1 for v in ibi.IOS_VALIDATORS
+        if v["check"] != "session_case" and (v["tc"], v["field"]) not in captured_keys)
     covered = {c["tc"] for c in cards}
     not_run = sorted({v["tc"] for v in ibi.IOS_VALIDATORS
                       if v["check"] != "session_case" and v["tc"] not in covered})
@@ -230,7 +237,9 @@ def evaluate_round(caps):
 def render_html(round_name, cards, counts, not_run, caps, environment, meta):
     title = "SDK_AUTOMATION iOS — " + " · ".join(
         x.upper() for x in (meta["test_mode"], meta["test_type"]) if x)
-    total = len({c["tc"] for c in cards})
+    # 分母＝完整 validator scope（pass+fail+blocked，含本輪未執行），與 signal_total、
+    # bars 百分比、Android 口徑一致；不再只算「有 capture 的 TC」而少報。
+    total = counts.get("pass", 0) + counts.get("fail", 0) + counts.get("blocked", 0)
     # 所有截圖（phone + state_proof）只各存一份（SHOTS map），卡片依 key 共享
     shots = {}
     for name, cap in caps.items():
@@ -326,8 +335,10 @@ def _meta_return(out_path, round_name, meta, counts, ncaps):
         "test_cid": meta["test_cid"], "test_executor": meta["test_executor"],
         "model": meta["model"], "elapsed": None,
         "signal_total": counts.get("pass", 0) + counts.get("fail", 0) + counts.get("blocked", 0),
+        # iOS「待校準/未執行」對齊 Android，一律歸 BLOCKED 桶（不要放 PENDING），
+        # build_platform 卡片才能與 Android 同口徑比較。
         "signal_counts": {"PASS": counts.get("pass", 0), "FAIL": counts.get("fail", 0),
-                          "PENDING": counts.get("blocked", 0), "MANUAL": 0, "BLOCKED": 0},
+                          "PENDING": 0, "MANUAL": 0, "BLOCKED": counts.get("blocked", 0)},
         "e2e_total": 0, "e2e_score": {"PASS": 0, "FAILED": 0, "BLOCKED": 0},
     }
 

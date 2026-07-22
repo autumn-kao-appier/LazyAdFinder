@@ -14,13 +14,10 @@ AdRequestBodyBuilder.build() + appier-ads-data-signal SignalSerializer,
 read 2026-07-09):
     {req_ver: 2, zone_id, w, h, interstitial?, test_mode?,
      req: {app, device, compliance},   <- ads SDK 自己組的 bid 參數
-     ext: {app, device, user}}         <- data-signal payload（本 QA 的驗證對象）
-The signal fields these TCs validate live under "ext" — _unwrap() prefers ext,
-falls back to the bid itself (raw payload captured from the [AppierDataSignal]
-logcat line), then req. Encryption is currently disabled in SignalManager
-(fetchKeyAsync / encryptor.encrypt commented out), so ext is plaintext JSON;
-if ext arrives as a string, encryption was re-enabled and this tool can't
-inspect it offline.
+     ext_enc: "ae1:..."}               <- encrypted data-signal payload
+The signal fields these TCs validate are decoded from ext_enc with the SDK's
+AprXorEnc algorithm, then recursively overlaid on req for validation. Older
+plaintext captures with top-level ext and raw signal payloads remain supported.
 
 Type conflicts in the TC sheet, resolved by reading the SDK implementation
 (sheet needs updating; swagger was right on both):
@@ -54,6 +51,7 @@ Usage:
     python bid_inspector.py --out /path/report.txt
 """
 
+import copy
 import glob
 import json
 import os
@@ -63,6 +61,28 @@ import time
 from datetime import datetime
 
 # ── request wrapper unwrap ────────────────────────────────────────────────────
+
+def _deep_merge(base, overlay):
+    """Return a recursive merge without mutating either evidence object."""
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+    if not isinstance(overlay, dict):
+        return merged
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _decode_ext_enc(bid):
+    """Decode the real AOS Signal payload embedded in the request, if present."""
+    if not isinstance(bid, dict) or not bid.get("ext_enc"):
+        return None
+    from apr_xorenc import decode_ext_enc
+    _raw, decoded = decode_ext_enc(bid)
+    return decoded
+
 
 def _unwrap(bid):
     """Locate the data-signal payload {app, device, user}.
@@ -84,6 +104,13 @@ def _unwrap(bid):
         if {"device", "user"} & bid.keys():
             return bid
         if isinstance(bid.get("req"), dict):
+            # Current AOS requests keep ordinary ad fields in req and the full
+            # Signal payload in ext_enc.  Decode and overlay every decrypted
+            # device/user/app field so all validators inspect the real signal
+            # values, while callers retain the untouched raw request.
+            decoded = _decode_ext_enc(bid)
+            if isinstance(decoded, dict):
+                return _deep_merge(bid["req"], decoded)
             return bid["req"]
     return bid
 
@@ -471,6 +498,7 @@ def _trunc(val, n=38):
 
 def run_inspection(bid, tc_filter=None, reference_ms=None):
     root = _unwrap(bid)
+    decoded = _decode_ext_enc(bid)
     results = []
     for v in VALIDATORS:
         if tc_filter and v["tc"] not in tc_filter:
@@ -481,6 +509,7 @@ def run_inspection(bid, tc_filter=None, reference_ms=None):
             continue
         source = bid if v.get("root") == "raw" else root
         passed, actual, msg = run_validator(source, v, reference_ms=reference_ms)
+        _, from_decrypted = get_field(decoded, v["field"]) if isinstance(decoded, dict) else (None, False)
         results.append({
             "tc":     v["tc"],
             "field":  v["field"],
@@ -488,6 +517,7 @@ def run_inspection(bid, tc_filter=None, reference_ms=None):
             "actual": actual,
             "msg":    msg,
             "note":   v.get("note", ""),
+            "source": "ext_enc" if from_decrypted and v.get("root") != "raw" else "request",
         })
     return results
 
@@ -557,33 +587,50 @@ def aggregate_round(round_dir):
 
 def format_round_report(rows, round_name=""):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 與平台（build_artifact.classify）採同一判定，避免 round_report 與平台 HTML 對同一
+    # round 給互相矛盾的數字：清楚限制（RD 未實作／硬體不可得＝BLOCKED∪RD_GAP）恆判 BLOCK，
+    # 不當 FAIL 也不當 PASS；其餘有 capture 就 PASS/FAIL。lazy import 破循環相依。
+    try:
+        from build_artifact import BLOCKED as _BLOCKED, RD_GAP as _RD_GAP
+        limit_set = set(_BLOCKED) | set(_RD_GAP)
+    except Exception:
+        limit_set = set()
+
+    def verdict(r):
+        if r["tc"] in limit_set:
+            return "BLOCK"
+        return "PASS" if r["passed"] else "FAIL"
+
     W = 104
     lines = [
         "=" * W,
         f"  SSP SDK Round Report — {round_name}  —  generated {ts}",
-        "  每條 check 取該 round 內最新一次 capture 的結果",
+        "  每條 check 取該 round 內最新一次 capture 的結果（判定與平台一致）",
         "=" * W,
         "",
         f"{'TC':<8}  {'Field':<32}  {'Actual':<24}  {'Result':<7}  Capture",
         f"{'─'*8}  {'─'*32}  {'─'*24}  {'─'*7}  {'─'*26}",
     ]
-    passed = failed = 0
+    passed = failed = blocked = 0
+    label = {"PASS": "PASS ✓", "FAIL": "FAIL ✗", "BLOCK": "BLOCK ▪"}
     for r in rows:
-        status = "PASS ✓" if r["passed"] else "FAIL ✗"
+        v = verdict(r)
         lines.append(
-            f"{r['tc']:<8}  {r['field']:<32}  {_trunc(r['actual'], 22):<24}  {status:<7}  {r['capture']}"
+            f"{r['tc']:<8}  {r['field']:<32}  {_trunc(r['actual'], 22):<24}  {label[v]:<7}  {r['capture']}"
         )
-        if not r["passed"] and r.get("note"):
+        if v != "PASS" and r.get("note"):
             lines.append(f"{'':8}  ↳ {r['note']}")
-        if r["passed"]:
+        if v == "PASS":
             passed += 1
-        else:
+        elif v == "FAIL":
             failed += 1
+        else:
+            blocked += 1
     covered = {(r["tc"], r["field"]) for r in rows}
     missing_tcs = sorted({v["tc"] for v in VALIDATORS if (v["tc"], v["field"]) not in covered})
     lines += [
         "─" * W,
-        f"  {passed} passed  /  {failed} failed  /  {len(rows)} checked"
+        f"  {passed} passed  /  {failed} failed  /  {blocked} blocked (RD/硬體限制)  /  {len(rows)} checked"
         f"  /  {len(missing_tcs)} TC not yet captured",
     ]
     if missing_tcs:

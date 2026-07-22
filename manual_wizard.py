@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""無人值守的最少輪數測試 runner。
+"""無人值守的完整 Signal round runner。
 
-順序：手動 rounds（M1→M2→M3）先跑、AUTO baseline 最後（先還原標準狀態再跑）。
-單一 round 的狀態建不起來或 capture 失敗時，只跳過該 round、繼續其他 rounds；
-缺的 round 之後用 START_AT=M2 這類方式單獨補。
+M1/M2/M3/SC/AUTO 是同一個 TEST_ROUND 內部的自動狀態批次，不是獨立 TC
+round。runner 依序建立互斥狀態並 capture，所有結果最後合併到同一份 round
+report。單一批次失敗時只跳過該批次並繼續；可用 START_AT=M2 補跑。
 """
 
 import os
@@ -227,9 +227,15 @@ def restore_standard_state():
     adb("shell", "appops", "set", APP_PACKAGE, "ACCESS_COARSE_LOCATION", "allow")
     adb("shell", "cmd", "alarm", "set-timezone", "Asia/Taipei")
     vpn_off = set_tailscale(False) if vpn_active() else True
+    try:
+        ensure_tracking(True)
+        tracking_restored = True
+    except AutomationError:
+        tracking_restored = False
     print("[還原] light mode / battery saver off / brightness 40% / font 1.0 / volume 12")
     print("[還原] location allowed / timezone Asia/Taipei / battery reset")
     print(f"[還原] VPN off：{'OK' if vpn_off else 'FAILED'}")
+    print(f"[還原] GAID opt-in：{'OK' if tracking_restored else 'FAILED'}")
 
 
 def build_and_open_report(env):
@@ -295,7 +301,7 @@ def failed_signal_tcs(env):
 
 
 def retry_failed_rounds(env):
-    """Retry every failed Signal TC in a new phase-matched Capture."""
+    """Retry every failed Signal TC in a matching state capture."""
     from build_artifact import AUTO_TCS, M1_TCS, M2_TCS, M3_TCS
 
     max_retries = int(os.environ.get("MAX_FAILED_RETRIES", "1"))
@@ -314,7 +320,10 @@ def retry_failed_rounds(env):
         for phase, tcs in phases:
             if not tcs:
                 continue
-            if phase == "M1":
+            if phase == "AUTO":
+                # AUTO_TCS 應在標準狀態下抓；否則（如 STOP_AFTER=M2 後）會沾 M2 殘留。
+                restore_standard_state()
+            elif phase == "M1":
                 ensure_tracking(True)
                 ensure_app_locale("en-US")
                 ensure_battery("M1 retry battery", level=100, charging=False)
@@ -349,8 +358,12 @@ def ensure_vpn(expected):
     if set_tailscale(expected):
         # Tailscale UI 若留在前景會蓋住 sample app，導致 capture 的刷廣告 loop 找不到版位
         adb("shell", "input", "keyevent", "KEYCODE_HOME")
-        print(f"[自動] Tailscale VPN → {'on' if expected else 'off'}")
-        return
+        # set_tailscale 的 off 判斷抓 UI 第一個 checkable，可能不是 VPN 開關 → 用
+        # vpn_active() ground truth 復驗，回報成功但實際不符就落到人工 fallback。
+        if vpn_active() == expected:
+            print(f"[自動] Tailscale VPN → {'on' if expected else 'off'}")
+            return
+        print("[警告] Tailscale 回報成功但 vpn_active 讀回不符，改人工確認")
     manual_or_fail("VPN " + ("on" if expected else "off"),
                    "請在已開啟頁面建立目標狀態。",
                    action="android.settings.VPN_SETTINGS")
@@ -365,6 +378,10 @@ def dump_ui():
 
 
 def tracking_opted_in():
+    # state-proof 截圖可能留下通知欄／鎖屏遮罩；遮罩存在時 uiautomator 只會
+    # dump SystemUI，導致找不到 Delete/Get advertising ID。
+    adb("shell", "cmd", "statusbar", "collapse")
+    adb("shell", "wm", "dismiss-keyguard")
     adb("shell", "am", "start", "-n",
         "com.google.android.gms/.adsidentity.settings.AdsIdentitySettingsActivity")
     subprocess.run(["sleep", "2"])
@@ -480,14 +497,43 @@ def set_volume(value):
     print(f"[自動] 媒體音量 → {target}（{value}）；讀回 {actual.group(1)}/{actual.group(3)}")
 
 
+def _location_granted():
+    """讀回 runtime 權限 ground truth：任一 FINE/COARSE granted 即視為「app 有定位」。
+    回 True=有定位 / False=完全沒有 / None=讀不到。"""
+    dump = adb("shell", "dumpsys", "package", APP_PACKAGE)
+    vals = []
+    for perm in ("ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"):
+        m = re.search(perm + r":\s*granted=(true|false)", dump)
+        if m:
+            vals.append(m.group(1) == "true")
+    if not vals:
+        return None
+    return any(vals)
+
+
 def set_location(grant):
+    # revoke 只動 FINE 會留下 COARSE（restore 同時給兩者）→ 「拒絕」情境其實仍有粗定位、
+    # bid 仍帶 geo，卻被當拒絕驗（假 PASS/FAIL）。FINE+COARSE 兩個機制（pm + appops）都要對齊。
     verb = "grant" if grant else "revoke"
-    out = adb("shell", "pm", verb, APP_PACKAGE, "android.permission.ACCESS_FINE_LOCATION")
-    if "exception" in out.lower() or "not requested" in out.lower():
-        manual_or_fail("Location permission", "請切換 App 的 Location permission。",
+    op = "allow" if grant else "ignore"
+    out = ""
+    for perm in ("android.permission.ACCESS_FINE_LOCATION",
+                 "android.permission.ACCESS_COARSE_LOCATION"):
+        out += adb("shell", "pm", verb, APP_PACKAGE, perm) + "\n"
+    for opname in ("ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"):
+        adb("shell", "appops", "set", APP_PACKAGE, opname, op)
+    actual = _location_granted()   # ground-truth 讀回
+    cmd_err = "exception" in out.lower() or "not requested" in out.lower()
+    if cmd_err or (actual is not None and actual != grant):
+        manual_or_fail("Location permission",
+                       f"請將 App 的 Location 權限（含粗略定位）切為 {'allowed' if grant else 'denied'}。",
                        action="android.settings.APPLICATION_DETAILS_SETTINGS")
-    else:
-        print(f"[自動] Location permission → {'allowed' if grant else 'denied'}")
+        actual = _location_granted()
+        if actual is not None and actual != grant:
+            raise AutomationError(
+                f"Location：讀回 granted={actual}，預期 {grant}（FINE+COARSE 未對齊）")
+    print(f"[自動] Location permission → {'allowed' if grant else 'denied'}"
+          f"（FINE+COARSE；讀回 granted={actual}）")
 
 
 def auto_common(high):
@@ -607,24 +653,30 @@ def _phase_session(env):
     # user.session_duration＝App 前景累積時間（iOS 實作同語意）。
     # 三情境各跑一個 capture：bid A → 情境動作 → bid B 對照（run_ssp SESSION_CASE）。
     print("\n===== SC：user.session_duration 三情境（App 前景時間）=====")
+    # session baseline 必須從乾淨標準狀態量；SC 排在 M2/M3 之後，不先還原會沾到
+    # opt-out/VPN-on/UTC/暗色/滿亮度殘留，且 opt-out 可能填不到廣告。
+    restore_standard_state()
+    # SC capture 給有界重試（預設 40），避免殘留/低填充狀態下 run_ssp 無限 retry 卡死。
+    sc_attempts = os.environ.get("MAX_AD_ATTEMPTS", "40")
     rc = 0
     for case, desc in (("1", "只關廣告頁→累進"), ("2", "殺整個 App→重置"),
                        ("3", "背景切回→累進")):
         tc = f"AND-47-{case}"
-        code = run_capture(tc, [tc], {**env, "SESSION_CASE": case},
+        code = run_capture(tc, [tc],
+                           {**env, "SESSION_CASE": case, "MAX_AD_ATTEMPTS": sc_attempts},
                            dwell=10, action=f"Auto SC{case}：{desc}")
         rc = rc or code
     return rc
 
 
 def _phase_auto(env):
-    # AUTO baseline 放最後：先還原標準狀態，baseline 才不會沾到手動 rounds 的殘留
+    # baseline 放最後：先還原標準狀態，避免沾到前面互斥狀態批次的殘留。
     print("\n===== AUTO：Baseline（還原標準狀態後執行）=====")
     restore_standard_state()
-    return run_capture("AUTO", [], env, action="自動 baseline（手動 rounds 之後執行）")
+    return run_capture("AUTO", [], env, action="自動 baseline（其他狀態 capture 之後執行）")
 
 
-# 手動 rounds（M1→M2→M3）先跑、SC 情境次之、AUTO baseline 最後。
+# 同一個 TEST_ROUND 內的自動狀態批次；SC 次之、AUTO baseline 最後。
 PHASE_ORDER = ["M1", "M2", "M3", "SC", "AUTO"]
 PHASES = {"M1": _phase_m1, "M2": _phase_m2, "M3": _phase_m3,
           "SC": _phase_session, "AUTO": _phase_auto}
@@ -639,8 +691,8 @@ def main():
     if start_at not in PHASE_ORDER:
         sys.exit("START_AT 必須是 M1、M2、M3、SC 或 AUTO")
 
-    # 單一 round 失敗（狀態建不起來 / capture 沒命中）只跳過該 round，
-    # 不擋其他 rounds；缺的 round 之後可用 START_AT 單獨補、STOP_AFTER 提前收尾。
+    # 單一狀態批次失敗（狀態建不起來 / capture 沒命中）不擋同 round 其他批次；
+    # 缺的批次可用 START_AT 單獨補、STOP_AFTER 提前收尾。
     stop_after = os.environ.get("STOP_AFTER", "").upper()
     phase_names = PHASE_ORDER[PHASE_ORDER.index(start_at):]
     if stop_after in PHASE_ORDER:
@@ -661,10 +713,10 @@ def main():
     except AutomationError as exc:
         print(f"\n[Retry 中斷] {exc}")
     if incomplete:
-        print(f"\n完成（部分）：{'、'.join(incomplete)} 未完成，其餘 rounds 已跑完。"
+        print(f"\n完整 TC round 部分完成：{'、'.join(incomplete)} 狀態批次未完成，其餘已合併。"
               "root/emulator/SIM 另列硬體輪次。")
     else:
-        print("\n完成：M1 + M2 + M3 + AUTO + failed-case retries。root/emulator/SIM 另列硬體輪次。")
+        print("\n完整 TC round 已完成並合併；root/emulator/SIM 另列硬體輪次。")
     build_and_open_report(env)
 
 
